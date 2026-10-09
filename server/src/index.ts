@@ -41,6 +41,12 @@ async function main(): Promise<void> {
     },
   );
 
+  server.once("error", (err) => {
+    logSafeError(err);
+    db.$client.close();
+    process.exit(1);
+  });
+
   const shutdown = createShutdown(server, () => db.$client.close());
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

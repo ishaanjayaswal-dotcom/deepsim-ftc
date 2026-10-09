@@ -130,3 +130,16 @@ describe("parser work bounds", () => {
     }
   });
 });
+
+
+describe("parser line-index regression", () => {
+  it("parses the audit's 65 KB newline-heavy source in under 250 ms", () => {
+    const prefix = '{"path":[{x:0,y:0,heading:0},{x:10,y:0,heading:0}],"junk":[';
+    const count = Math.floor((65531 - prefix.length - 2) / 7);
+    const source = prefix + Array(count).fill("{x:0}\n").join(",") + "]}";
+    expect(source.length).toBeGreaterThan(65000);
+    const start = performance.now();
+    expect(parsePath(source).spec?.waypoints).toHaveLength(2);
+    expect(performance.now() - start).toBeLessThan(250);
+  });
+});

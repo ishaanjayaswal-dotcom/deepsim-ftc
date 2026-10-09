@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { migrate } from "drizzle-orm/libsql/migrator";
+import { createApp } from "../src/app.js";
+import { ADMIN_KEY } from "./helpers.js";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deriveFromSource } from "../../src/repo/derive.js";
@@ -56,6 +59,55 @@ describe("F3 completion regressions", () => {
     } finally { ctx.close(); }
   });
 
+  it("preserves pre-F3 legacy rows at boot while rejecting their invalid data on PATCH", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "deepsim-f4-legacy-"));
+    const url = `file:${join(dir, "legacy.sqlite")}`;
+    const oldStats = { lengthIn: 250, durationS: 45, segments: 1, grade: "D" };
+    const sources = [
+      '{"alliance":"blue","path":[[0,0],[250,0]]}',
+      "{alliance:'blue',path:[{x:0,y:0},{x:10,y:0,wait:45}]}",
+      validDraft().data,
+      "broken legacy source",
+      Buffer.from("{alliance:'blue',path:[[0,0],[250,0]]}").toString("base64"),
+    ];
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    let db = await createDb(url);
+    try {
+      // Same schema/journal as 33193f3; no strict backfill during fixture setup.
+      await migrate(db, { migrationsFolder: "server/drizzle" });
+      for (const [i, data] of sources.entries()) {
+        await db.insert(paths).values({
+          ...validDraft({ data }), id: `legacy-${i}`, stats: JSON.stringify(oldStats),
+          thumbnail: "old", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+        });
+      }
+      db.$client.close();
+      db = await createDb(url);
+      await runMigrations(db);
+      const app = createApp({ db, config: loadConfig({ SEED: "false", ADMIN_KEY }), limiter: false });
+      const listed = await (await app.request("/api/paths")).json();
+      expect(listed).toHaveLength(sources.length);
+      const stored = await db.select().from(paths).orderBy(paths.id);
+      expect(stored.map((row) => JSON.parse(row.stats).alliance)).toEqual(["blue", "blue", "red", "red", "blue"]);
+      for (const [i, row] of stored.entries()) {
+        expect(row.data).toBe(sources[i]);
+        if (i !== 2) {
+          expect(JSON.parse(row.stats)).toEqual({ ...oldStats, alliance: i === 3 ? "red" : "blue" });
+          expect(row.thumbnail).toBe("old");
+        }
+        const response = await app.request(`/api/paths/${row.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_KEY}` },
+          body: JSON.stringify({ data: row.data }),
+        });
+        expect(response.status).toBe(i === 2 ? 200 : 400);
+      }
+      expect(log.mock.calls).toHaveLength(4);
+      expect(log.mock.calls.map(([line]) => JSON.parse(line).rowId)).toEqual(["legacy-0", "legacy-1", "legacy-3", "legacy-4"]);
+      await runMigrations(db);
+      expect(log.mock.calls).toHaveLength(4);
+    } finally { db.$client.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("shares HEAD and GET read buckets", async () => {
     const ctx = await createTestContext({ limiter: createTinyLimiter() });
     try {
@@ -100,12 +152,15 @@ describe("F3 completion regressions", () => {
     } finally { ctx.close(); }
   });
 
-  it("rejects controls before trimming metadata, allowing only description newlines", async () => {
+  it("rejects controls before trimming metadata, allowing description tabs and newlines", async () => {
     const ctx = await createTestContext();
     try {
       const row = await (await post(ctx.app)).json();
       for (const field of ["name", "category", "description"]) {
-        for (const control of ["\0", "\t", "\r", "\x7f", "\x85", "\u2028", "\u2029", ...(field === "description" ? [] : ["\n"])]) {
+        for (const control of ["\0", "\r", "\x7f", "\x85", "\u2028", "\u2029", ...Array.from({ length: 5 }, (_, i) => String.fromCharCode(0x200b + i)),
+          ...Array.from({ length: 5 }, (_, i) => String.fromCharCode(0x202a + i)),
+          ...Array.from({ length: 4 }, (_, i) => String.fromCharCode(0x2066 + i)), "\ufeff",
+          ...(field === "description" ? [] : ["\n", "\t"])]) {
           const patch = { [field]: `before${control}after` };
           expect((await post(ctx.app, validDraft(patch))).status).toBe(400);
           expect((await ctx.app.request(`/api/paths/${row.id}`, {
@@ -113,7 +168,7 @@ describe("F3 completion regressions", () => {
           })).status).toBe(400);
         }
       }
-      expect((await post(ctx.app, validDraft({ description: "first\nsecond" }))).status).toBe(201);
+      expect((await post(ctx.app, validDraft({ description: "first\nsecond\tthird" }))).status).toBe(201);
     } finally { ctx.close(); }
   });
 
