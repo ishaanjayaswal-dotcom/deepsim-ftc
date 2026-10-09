@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { draftFromSource, repository, thumbnailFor } from "../repo/client";
 import { deriveFromSource } from "../repo/derive";
@@ -41,23 +41,29 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
   }, [source]);
   const canUpdate = Boolean(active.recordId && repository.canEdit(active.recordId));
 
-  // Editing a path this browser published: start from its stored metadata, not from the source defaults,
-  // so "update the original" never wipes a title, strategy or notes the user didn't touch.
+  // Editing a path this browser published: start from its stored metadata, not from the source defaults, so
+  // "update the original" never wipes a title, strategy or notes the user didn't touch. Updating waits for it.
+  const [original, setOriginal] = useState<"idle" | "loading" | "ready" | "failed">(canUpdate ? "loading" : "idle");
+  const dirty = useRef(new Set<string>());
+  const edit = <T,>(field: string, set: (v: T) => void) => (v: T) => {
+    dirty.current.add(field);
+    set(v);
+  };
   useEffect(() => {
     if (!canUpdate || !active.recordId) return;
     let live = true;
+    setOriginal("loading");
     repository
       .get(active.recordId)
       .then((rec) => {
         if (!live) return;
-        setName(rec.name);
-        setTeam(String(rec.teamNumber));
-        setCategory(rec.category);
-        setDescription(rec.description);
+        if (!dirty.current.has("name")) setName(rec.name);
+        if (!dirty.current.has("team")) setTeam(String(rec.teamNumber));
+        if (!dirty.current.has("category")) setCategory(rec.category);
+        if (!dirty.current.has("description")) setDescription(rec.description);
+        setOriginal("ready");
       })
-      .catch(() => {
-        /* the original is gone; publishing a copy still works */
-      });
+      .catch(() => live && setOriginal("failed"));
     return () => {
       live = false;
     };
@@ -75,6 +81,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
     const teamNumber = Number(team);
     if (!name.trim()) return setError("Give the path a name.");
     if (!Number.isInteger(teamNumber) || teamNumber < 1 || teamNumber > 99999) return setError("Team number must be 1–99999.");
+    if (updateOriginal && original !== "ready") return setError("Still loading the original entry — try again in a moment.");
     setBusy(true);
     try {
       const draft = draftFromSource(source, { name: name.trim(), teamNumber, category, description: description.trim() });
@@ -128,14 +135,14 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
           </div>
           <div className="min-w-0 flex-1 space-y-3">
             <Field label="Path name">
-              <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} className="input" autoFocus />
+              <input value={name} onChange={(e) => edit("name", setName)(e.target.value)} maxLength={60} className="input" autoFocus />
             </Field>
             <div className="flex gap-3">
               <Field label="Team #" className="w-24">
-                <input value={team} onChange={(e) => setTeam(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder="12345" className="input font-mono" />
+                <input value={team} onChange={(e) => edit("team", setTeam)(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder="12345" className="input font-mono" />
               </Field>
               <Field label="Strategy" className="flex-1">
-                <select value={category} onChange={(e) => setCategory(e.target.value)} className="input">
+                <select value={category} onChange={(e) => edit("category", setCategory)(e.target.value)} className="input">
                   {STRATEGY_CATEGORIES.map((c) => (
                     <option key={c}>{c}</option>
                   ))}
@@ -143,12 +150,12 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
               </Field>
             </div>
             <Field label="Notes for other teams">
-              <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} maxLength={280} placeholder="What it does, robot assumptions, tuning tips…" className="input h-auto resize-none py-2" />
+              <textarea value={description} onChange={(e) => edit("description", setDescription)(e.target.value)} rows={3} maxLength={280} placeholder="What it does, robot assumptions, tuning tips…" className="input h-auto resize-none py-2" />
             </Field>
             {canUpdate && (
               <label className="flex items-center gap-2 text-[12px] text-muted">
-                <input type="checkbox" checked={updateOriginal} onChange={(e) => setUpdateOriginal(e.target.checked)} className="accent-[#22d3ee]" />
-                Update the original hub entry instead of publishing a copy
+                <input type="checkbox" checked={updateOriginal} disabled={original !== "ready"} onChange={(e) => setUpdateOriginal(e.target.checked)} className="accent-[#22d3ee]" />
+                {original === "loading" ? "Loading the original hub entry…" : original === "failed" ? "Couldn't load the original entry — you can still publish a copy" : "Update the original hub entry instead of publishing a copy"}
               </label>
             )}
           </div>

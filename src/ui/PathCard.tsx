@@ -41,8 +41,15 @@ export function PathCard({
   const isActive = activeId === record.id;
 
   const copy = async () => {
+    let data: string;
     try {
-      await navigator.clipboard.writeText(encodeDataString((await repository.get(record.id)).data));
+      data = (await repository.get(record.id)).data;
+    } catch (e) {
+      useApp.getState().showToast((e as Error).message, "bad");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(encodeDataString(data));
       useApp.getState().showToast("Data string copied — paste it into any editor", "info");
     } catch {
       useApp.getState().showToast("Clipboard unavailable", "bad");
