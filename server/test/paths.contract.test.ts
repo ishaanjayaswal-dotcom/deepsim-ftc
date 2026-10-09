@@ -310,3 +310,71 @@ describe("paths API contract", () => {
     assertNoEditKeyLeak(one);
   });
 });
+
+describe("F1 data regressions", () => {
+  let ctx: TestContext;
+  beforeEach(async () => { ctx = await createTestContext(); });
+  afterEach(() => ctx.close());
+  const create = async (draft = validDraft()) => (await ctx.app.request("/api/paths", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft),
+  })).json();
+  const patch = (row: { id: string; editKey: string }, body: unknown) => ctx.app.request(`/api/paths/${row.id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", "X-Edit-Key": row.editKey }, body: JSON.stringify(body),
+  });
+
+  it("folds Unicode search on create and maintains it on metadata patch", async () => {
+    const row = await create(validDraft({ name: "Ünïcode", description: "ΩMEGA", category: "Élite" }));
+    for (const q of ["ÜNÏCODE", "ünïcode", "ωmega", "élite", "12345"]) {
+      expect(await (await ctx.app.request(`/api/paths?q=${encodeURIComponent(q)}`)).json()).toHaveLength(1);
+    }
+    await patch(row, { name: "Änderung", description: "Δelta", category: "Öther", teamNumber: 999 });
+    for (const q of ["änderung", "δELTA", "öther", "999"]) {
+      expect(await (await ctx.app.request(`/api/paths?q=${encodeURIComponent(q)}`)).json()).toHaveLength(1);
+    }
+    expect(await (await ctx.app.request("/api/paths?q=ünïcode")).json()).toHaveLength(0);
+  });
+
+  it("rederives when the patch resends unchanged data", async () => {
+    const { paths } = await import("../src/db/schema.js");
+    const row = await create();
+    await ctx.db.update(paths).set({ thumbnail: "stale", stats: "{}" }).where(eq(paths.id, row.id));
+    const response = await (await patch(row, { data: PARK_SOURCE })).json();
+    expect(response.thumbnail).toBe(deriveFromSource(PARK_SOURCE).thumbnail);
+    expect(response.stats).toEqual(deriveFromSource(PARK_SOURCE).stats);
+  });
+
+  it("uses descending ids to break ties on both paginated sorts", async () => {
+    const { paths } = await import("../src/db/schema.js");
+    const rows = [await create(), await create(), await create()];
+    await ctx.db.update(paths).set({ createdAt: "2026-01-01T00:00:00.000Z", upvotes: 0 });
+    const ids = rows.map((row) => row.id).sort().reverse();
+    for (const sort of ["new", "top"]) {
+      const actual = [];
+      for (let offset = 0; offset < 3; offset++) {
+        const page = await (await ctx.app.request(`/api/paths?sort=${sort}&limit=1&offset=${offset}`)).json();
+        actual.push(page[0].id);
+      }
+      expect(actual).toEqual(ids);
+    }
+  });
+
+  it("defaults list limit to 50 and caps it at 100", async () => {
+    const { paths } = await import("../src/db/schema.js");
+    const row = await create();
+    const [stored] = await ctx.db.select().from(paths).where(eq(paths.id, row.id));
+    await ctx.db.insert(paths).values(Array.from({ length: 100 }, (_, i) => ({ ...stored, id: `limit-${i}` })));
+    expect(await (await ctx.app.request("/api/paths")).json()).toHaveLength(50);
+    expect(await (await ctx.app.request("/api/paths?limit=100")).json()).toHaveLength(100);
+    expect((await ctx.app.request("/api/paths?limit=101")).status).toBe(400);
+  });
+
+  it("trims category and description before validation on create and patch", async () => {
+    const bad = await ctx.app.request("/api/paths", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(validDraft({ category: "   " })) });
+    expect(bad.status).toBe(400);
+    const row = await create(validDraft({ category: "  Park  ", description: "  note  " }));
+    expect(row.category).toBe("Park"); expect(row.description).toBe("note");
+    expect((await patch(row, { category: "  " })).status).toBe(400);
+    const updated = await (await patch(row, { description: " new ", category: " Next " })).json();
+    expect(updated.category).toBe("Next"); expect(updated.description).toBe("new");
+  });
+});

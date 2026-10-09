@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { deriveFromSource } from "../../../src/repo/derive.js";
@@ -8,6 +8,7 @@ import type { AppDeps } from "../app.js";
 import { paths, votes } from "../db/schema.js";
 import { canEdit, createEditKey, EDIT_FORBIDDEN, hashEditKey } from "../lib/auth.js";
 import { createRateLimiter, rateLimit } from "../lib/rateLimit.js";
+import { searchText } from "../lib/search.js";
 import { draftSchema, patchSchema, querySchema, validate, validationMessage, voterSchema } from "../lib/validation.js";
 
 type PathRow = typeof paths.$inferSelect;
@@ -48,16 +49,11 @@ export function createPathsRoutes({ db, config, limiter = createRateLimiter() }:
     const conditions = [];
     if (category) conditions.push(eq(paths.category, category));
     if (q) {
-      const pattern = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
-      conditions.push(or(
-        sql`lower(${paths.name}) like lower(${pattern}) escape '\\'`,
-        sql`lower(${paths.description}) like lower(${pattern}) escape '\\'`,
-        sql`lower(${paths.category}) like lower(${pattern}) escape '\\'`,
-        sql`cast(${paths.teamNumber} as text) like ${pattern} escape '\\'`,
-      ));
+      const pattern = `%${q.toLocaleLowerCase("und").replace(/[\\%_]/g, "\\$&")}%`;
+      conditions.push(sql`${paths.searchText} like ${pattern} escape '\\'`);
     }
     const rows = await db.select().from(paths).where(and(...conditions))
-      .orderBy(...(sort === "top" ? [desc(paths.upvotes), desc(paths.createdAt)] : [desc(paths.createdAt)]))
+      .orderBy(...(sort === "top" ? [desc(paths.upvotes), desc(paths.createdAt), desc(paths.id)] : [desc(paths.createdAt), desc(paths.id)]))
       .limit(limit).offset(offset);
     return c.json(rows.map(toRecord));
   });
@@ -69,7 +65,7 @@ export function createPathsRoutes({ db, config, limiter = createRateLimiter() }:
     const editKey = createEditKey();
     const now = new Date().toISOString();
     const [row] = await db.insert(paths).values({
-      ...draft, ...derive(draft.data), id: randomUUID(), editKeyHash: hashEditKey(editKey),
+      ...draft, searchText: searchText(draft), ...derive(draft.data), id: randomUUID(), editKeyHash: hashEditKey(editKey),
       createdAt: now, updatedAt: now,
     }).returning();
     return c.json({ ...toRecord(row), editKey }, 201);
@@ -79,9 +75,9 @@ export function createPathsRoutes({ db, config, limiter = createRateLimiter() }:
     const row = await find(c.req.param("id"));
     authorize(row, c.req.header("X-Edit-Key"), c.req.header("Authorization"));
     const patch = c.req.valid("json");
-    const derived = patch.data !== undefined && patch.data !== row.data ? derive(patch.data) : {};
+    const derived = patch.data !== undefined ? derive(patch.data) : {};
     const updatedAt = new Date(Math.max(Date.now(), Date.parse(row.updatedAt) + 1)).toISOString();
-    const [updated] = await db.update(paths).set({ ...patch, ...derived, updatedAt }).where(eq(paths.id, row.id)).returning();
+    const [updated] = await db.update(paths).set({ ...patch, ...derived, searchText: searchText({ ...row, ...patch }), updatedAt }).where(eq(paths.id, row.id)).returning();
     if (!updated) throw new HTTPException(404, { message: "Not found" });
     return c.json(toRecord(updated));
   });

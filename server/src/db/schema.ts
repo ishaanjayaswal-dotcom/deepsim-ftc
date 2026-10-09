@@ -8,6 +8,7 @@ export const paths = sqliteTable(
     teamNumber: integer("team_number").notNull(),
     category: text("category").notNull(),
     description: text("description").notNull().default(""),
+    searchText: text("search_text").notNull().default(""),
     data: text("data").notNull(),
     thumbnail: text("thumbnail").notNull(),
     stats: text("stats").notNull(),

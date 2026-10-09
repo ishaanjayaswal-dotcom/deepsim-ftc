@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { createRateLimiter, type RateLimiter } from "./lib/rateLimit.js";
+import { createRateLimiter, type RateLimiter, rateLimit } from "./lib/rateLimit.js";
 import { HTTPException } from "hono/http-exception";
 import type { Config } from "./config.js";
 import type { Db } from "./db/client.js";
@@ -20,7 +21,7 @@ export function createApp({ db, config, limiter = createRateLimiter() }: AppDeps
     await next();
     if (!c.req.path.startsWith("/assets/")) {
       // No query string, headers or request/response bodies (credentials live there).
-      console.log(`${c.req.method} ${c.req.path} ${c.res.status} ${(performance.now() - start).toFixed(1)}ms`);
+      console.log(`${c.req.method} ${c.req.path.replace(/[\x00-\x1f\x7f]/g, "?")} ${c.res.status} ${(performance.now() - start).toFixed(1)}ms`);
     }
   });
 
@@ -47,6 +48,11 @@ export function createApp({ db, config, limiter = createRateLimiter() }: AppDeps
 
   const api = new Hono();
 
+  api.use("*", async (c, next) => {
+    if (c.req.method === "GET" && c.req.path !== "/api/health") return rateLimit(limiter, "read", config.trustProxy)(c, next);
+    await next();
+  });
+
   api.get("/health", (c) => c.json({ ok: true, version: config.version }));
   api.route("/paths", createPathsRoutes({ db, config, limiter }));
 
@@ -68,7 +74,13 @@ export function createApp({ db, config, limiter = createRateLimiter() }: AppDeps
     if (err instanceof HTTPException && err.status < 500) {
       return c.json({ error: err.message }, err.status);
     }
-    console.error(err);
+    const errorId = randomUUID();
+    // Drizzle messages embed SQL and parameters. Log the underlying cause instead.
+    const detail = err.cause instanceof Error ? err.cause : err;
+    const message = /^Failed query:/i.test(detail.message)
+      ? "Database query failed"
+      : detail.message.split(/\n(?:Failed query:|params:)/i)[0];
+    console.error(JSON.stringify({ errorId, name: detail.name, message }));
     return c.json({ error: "Internal server error" }, err instanceof HTTPException ? err.status : 500);
   });
 

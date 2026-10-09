@@ -1,8 +1,9 @@
+import { createShutdown } from "./lib/shutdown.js";
 import { serve } from "@hono/node-server";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createApp } from "./app.js";
-import { loadConfig } from "./config.js";
+import { ConfigError, loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { runMigrations } from "./db/migrate.js";
 import { seedIfEmpty } from "./db/seed.js";
@@ -39,17 +40,13 @@ async function main(): Promise<void> {
     },
   );
 
-  const shutdown = () => {
-    server.close(() => {
-      db.$client.close();
-      process.exit(0);
-    });
-  };
+  const shutdown = createShutdown(server, () => db.$client.close());
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }
 
 main().catch((err) => {
-  console.error(err);
+  if (err instanceof ConfigError) err.lines.forEach((line) => console.error(line));
+  else console.error(err);
   process.exit(1);
 });

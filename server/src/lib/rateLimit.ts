@@ -2,12 +2,12 @@ import { getConnInfo } from "@hono/node-server/conninfo";
 import { isIP } from "node:net";
 import type { Context, MiddlewareHandler } from "hono";
 
-export type RateBucket = "create" | "edit" | "upvote";
+export type RateBucket = "create" | "edit" | "upvote" | "read";
 export type RateLimiter = {
   consume(ip: string, bucket: RateBucket): { allowed: boolean; retryAfter: number };
 };
 
-const limits: Record<RateBucket, number> = { create: 20, edit: 60, upvote: 120 };
+const limits: Record<RateBucket, number> = { create: 20, edit: 60, upvote: 120, read: 600 };
 
 export function createRateLimiter({
   windowMs = 10 * 60 * 1000,
@@ -29,10 +29,9 @@ export function createRateLimiter({
       const key = `${bucket}:${ip}`;
       let entry = windows.get(key);
       if (!entry) {
-        // Do not evict active windows: doing so would let clients bypass limits.
+        // Admit new identities by evicting the oldest fixed window at capacity.
         if (windows.size >= maxEntries) {
-          const oldest = windows.values().next().value!;
-          return { allowed: false, retryAfter: Math.max(1, Math.ceil((oldest.expires - time) / 1000)) };
+          windows.delete(windows.keys().next().value!);
         }
         entry = { count: 0, expires: time + windowMs };
         windows.set(key, entry);
@@ -44,14 +43,24 @@ export function createRateLimiter({
   };
 }
 
+export function canonicalIp(ip: string): string {
+  if (isIP(ip) !== 6) return ip;
+  const canonical = new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+  const mapped = /^::ffff:([0-9a-f]+):([0-9a-f]+)$/.exec(canonical);
+  if (!mapped) return canonical;
+  const high = parseInt(mapped[1], 16);
+  const low = parseInt(mapped[2], 16);
+  return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+}
+
 export function clientIp(c: Context, trustProxy: boolean): string {
   if (trustProxy) {
-    const forwarded = c.req.header("X-Forwarded-For")?.split(",", 1)[0]?.trim();
-    if (forwarded && isIP(forwarded)) return forwarded;
+    const forwarded = c.req.header("X-Forwarded-For")?.split(",").at(-1)?.trim();
+    if (forwarded && isIP(forwarded)) return canonicalIp(forwarded);
   }
   // app.request() has no Node socket; all such requests share a test identity.
   if (!c.env?.incoming && !c.env?.server?.incoming) return "unknown";
-  return getConnInfo(c).remote.address ?? "unknown";
+  return canonicalIp(getConnInfo(c).remote.address ?? "unknown");
 }
 
 export function rateLimit(limiter: RateLimiter | false, bucket: RateBucket, trustProxy: boolean): MiddlewareHandler {

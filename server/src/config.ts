@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 const envSchema = z.object({
@@ -7,12 +8,12 @@ const envSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   DATABASE_URL: z.string().default("file:./data/deepsim.db"),
   DATABASE_AUTH_TOKEN: z.string().optional(),
-  ADMIN_KEY: z.string().min(16, "ADMIN_KEY must be at least 16 characters when set").optional(),
-  CORS_ORIGIN: z.string().optional(),
+  ADMIN_KEY: z.string().min(16, "must be at least 16 characters when set").optional(),
+  CORS_ORIGIN: z.string().refine((v) => !v.split(",").some((origin) => origin.trim() === "*"), "wildcard * is unsupported; specify explicit origins").optional(),
   TRUST_PROXY: z
     .string()
     .optional()
-    .transform((v) => v === "true" || v === "1"),
+    .transform((v) => ["true", "1", "yes"].includes(v?.toLowerCase() ?? "")),
   SEED: z
     .string()
     .optional()
@@ -35,20 +36,26 @@ export type Config = {
 
 function readVersion(): string {
   try {
-    const raw = readFileSync(join(process.cwd(), "package.json"), "utf8");
+    const raw = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../package.json"), "utf8");
     return (JSON.parse(raw) as { version: string }).version;
   } catch {
     return "0.0.0";
   }
 }
 
-function defaultStaticDir(): string {
-  const dist = join(process.cwd(), "dist");
-  return existsSync(dist) ? "dist" : "dist";
+export class ConfigError extends Error {
+  constructor(public readonly lines: string[]) {
+    super(lines.join("\n"));
+    this.name = "ConfigError";
+  }
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = envSchema.parse(env);
+  const result = envSchema.safeParse(env);
+  if (!result.success) {
+    throw new ConfigError(result.error.issues.map((issue) => `Invalid config: ${issue.path.join(".")}: ${issue.message}`));
+  }
+  const parsed = result.data;
   const corsOrigins = parsed.CORS_ORIGIN
     ? parsed.CORS_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean)
     : [];
@@ -62,7 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     corsOrigins,
     trustProxy: parsed.TRUST_PROXY,
     seed: parsed.SEED,
-    staticDir: parsed.STATIC_DIR ?? defaultStaticDir(),
+    staticDir: parsed.STATIC_DIR ?? "dist",
     version: readVersion(),
   };
 }
