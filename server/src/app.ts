@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -67,8 +68,11 @@ export function createApp({ db, config, limiter = createRateLimiter() }: AppDeps
     }
   });
 
-  app.use("*", serveStatic({ root: config.staticDir }));
-  app.get("*", serveStatic({ root: config.staticDir, path: "index.html" }));
+  // API-only when the web app has not been built (dev, tests): nothing to serve, nothing to warn about.
+  if (existsSync(config.staticDir)) {
+    app.use("*", serveStatic({ root: config.staticDir }));
+    app.get("*", serveStatic({ root: config.staticDir, path: "index.html" }));
+  }
 
   app.onError((err, c) => {
     if (err instanceof HTTPException && err.status < 500) {
