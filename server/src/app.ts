@@ -1,11 +1,13 @@
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import type { Config } from "./config.js";
 import type { Db } from "./db/client.js";
+import { createPathsRoutes } from "./routes/paths.js";
 
 export type AppDeps = { db: Db; config: Config };
 
-export function createApp({ db: _db, config }: AppDeps): Hono {
+export function createApp({ db, config }: AppDeps): Hono {
   const app = new Hono();
 
   if (config.corsOrigins.length > 0) {
@@ -27,6 +29,7 @@ export function createApp({ db: _db, config }: AppDeps): Hono {
   const api = new Hono();
 
   api.get("/health", (c) => c.json({ ok: true, version: config.version }));
+  api.route("/paths", createPathsRoutes({ db, config }));
 
   api.all("*", (c) => c.json({ error: "Not found" }, 404));
 
@@ -43,13 +46,10 @@ export function createApp({ db: _db, config }: AppDeps): Hono {
   app.get("*", serveStatic({ root: config.staticDir, path: "index.html" }));
 
   app.onError((err, c) => {
-    const message = err instanceof Error ? err.message : "Internal server error";
-    const rawStatus =
-      typeof err === "object" && err !== null && "status" in err && typeof err.status === "number"
-        ? err.status
-        : 500;
-    const status = rawStatus >= 400 && rawStatus < 600 ? rawStatus : 500;
-    return c.json({ error: message }, status as 500);
+    if (err instanceof HTTPException && err.status < 500) {
+      return c.json({ error: err.message }, err.status);
+    }
+    return c.json({ error: "Internal server error" }, 500);
   });
 
   return app;
