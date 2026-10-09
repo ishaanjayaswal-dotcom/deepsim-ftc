@@ -54,7 +54,7 @@ export type TestContext = {
 };
 
 export async function createTestContext(options: TestContextOptions = {}): Promise<TestContext> {
-  const db = createDb("file::memory:");
+  const db = await createDb("file::memory:");
   await migrate(db, { migrationsFolder: "server/drizzle" });
 
   const env: NodeJS.ProcessEnv = {

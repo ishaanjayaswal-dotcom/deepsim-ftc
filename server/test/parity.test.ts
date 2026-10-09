@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HttpPathRepository, LocalPathRepository } from "../../src/repo/client.js";
-import type { PathDraft, PathRecord } from "../../src/repo/types.js";
+import type { PathDraft, PathRecord, PathSummary } from "../../src/repo/types.js";
 import { deriveFromSource } from "../../src/repo/derive.js";
 import { presetSource } from "../../src/path/presets.js";
 import { createTestContext, validDraft, VOTER_A, type TestContext } from "./helpers.js";
@@ -38,7 +38,7 @@ function clientDraft(overrides: Parameters<typeof validDraft>[0] = {}): PathDraf
   return { ...draft, thumbnail: derived.thumbnail, stats: derived.stats };
 }
 
-function stripVolatile(rows: PathRecord[]) {
+function stripVolatile(rows: (PathSummary & { data?: string })[]) {
   return rows.map((r) => ({
     name: r.name,
     teamNumber: r.teamNumber,
@@ -107,19 +107,29 @@ describe("LocalPathRepository vs HttpPathRepository", () => {
 
     await local.upvote(localRows[1].id);
     await http.upvote(httpRows[1].id);
-    await local.upvote(localRows[2].id);
-    await http.upvote(httpRows[2].id);
+    await local.upvote(localRows[0].id);
+    await http.upvote(httpRows[0].id);
 
-    const namesNew = (rows: PathRecord[]) => stripVolatile(rows).map((r) => r.name);
+    const namesNew = (rows: PathSummary[]) => stripVolatile(rows).map((r) => r.name);
     const localNew = namesNew(await local.list({ sort: "new" }));
     const httpNew = namesNew(await http.list({ sort: "new" }));
-    expect(localNew).toEqual(httpNew);
+    expect(httpNew).toEqual(["Parity Third", "Parity Second", "Parity First"]);
     expect(localNew).toEqual(["Parity Third", "Parity Second", "Parity First"]);
 
     const localTop = namesNew(await local.list({ sort: "top" }));
     const httpTop = namesNew(await http.list({ sort: "top" }));
-    expect(localTop).toEqual(httpTop);
-    expect(localTop).toEqual(["Parity Third", "Parity Second", "Parity First"]);
+    expect(httpTop).toEqual(["Parity Second", "Parity First", "Parity Third"]);
+    expect(localTop).toEqual(["Parity Second", "Parity First", "Parity Third"]);
+
+    for (const repo of [local, http]) {
+      const summaries = await repo.list();
+      for (const summary of summaries) {
+        expect(summary).not.toHaveProperty("data");
+        expect(summary.stats.alliance).toBe("red");
+      }
+    }
+    expect(await local.get(localRows[0].id)).toHaveProperty("data", drafts[0].data);
+    expect(await http.get(httpRows[0].id)).toHaveProperty("data", drafts[0].data);
 
     const localSearch = stripVolatile(await local.list({ q: "Parity" }));
     const httpSearch = stripVolatile(await http.list({ q: "Parity" }));

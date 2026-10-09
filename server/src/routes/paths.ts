@@ -1,17 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { deriveFromSource } from "../../../src/repo/derive.js";
-import type { PathRecord } from "../../../src/repo/types.js";
+import type { PathRecord, PathSummary } from "../../../src/repo/types.js";
 import type { AppDeps } from "../app.js";
 import { paths, votes } from "../db/schema.js";
 import { canEdit, createEditKey, EDIT_FORBIDDEN, hashEditKey } from "../lib/auth.js";
 import { createRateLimiter, rateLimit } from "../lib/rateLimit.js";
-import { searchText } from "../lib/search.js";
+import { normalizeSearch, searchText } from "../lib/search.js";
 import { draftSchema, patchSchema, querySchema, validate, validationMessage, voterSchema } from "../lib/validation.js";
 
 type PathRow = typeof paths.$inferSelect;
+const { data: _data, editKeyHash: _editKeyHash, searchText: _searchText, ...summaryColumns } = getTableColumns(paths);
+
+function toSummary(row: Omit<PathRow, "data" | "editKeyHash" | "searchText">): PathSummary {
+  return { ...row, stats: JSON.parse(row.stats) as PathSummary["stats"],
+    createdAt: new Date(row.createdAt).toISOString(), updatedAt: new Date(row.updatedAt).toISOString() };
+}
 
 export function toRecord(row: PathRow): PathRecord {
   return {
@@ -49,13 +55,13 @@ export function createPathsRoutes({ db, config, limiter = createRateLimiter() }:
     const conditions = [];
     if (category) conditions.push(eq(paths.category, category));
     if (q) {
-      const pattern = `%${q.toLocaleLowerCase("und").replace(/[\\%_]/g, "\\$&")}%`;
+      const pattern = `%${normalizeSearch(q).replace(/[\\%_]/g, "\\$&")}%`;
       conditions.push(sql`${paths.searchText} like ${pattern} escape '\\'`);
     }
-    const rows = await db.select().from(paths).where(and(...conditions))
+    const rows = await db.select(summaryColumns).from(paths).where(and(...conditions))
       .orderBy(...(sort === "top" ? [desc(paths.upvotes), desc(paths.createdAt), desc(paths.id)] : [desc(paths.createdAt), desc(paths.id)]))
       .limit(limit).offset(offset);
-    return c.json(rows.map(toRecord));
+    return c.json(rows.map(toSummary));
   });
 
   routes.get("/:id", async (c) => c.json(toRecord(await find(c.req.param("id")))));
@@ -72,13 +78,17 @@ export function createPathsRoutes({ db, config, limiter = createRateLimiter() }:
   });
 
   routes.patch("/:id", rateLimit(limiter, "edit", config.trustProxy), validate("json", patchSchema), async (c) => {
-    const row = await find(c.req.param("id"));
-    authorize(row, c.req.header("X-Edit-Key"), c.req.header("Authorization"));
     const patch = c.req.valid("json");
-    const derived = patch.data !== undefined ? derive(patch.data) : {};
-    const updatedAt = new Date(Math.max(Date.now(), Date.parse(row.updatedAt) + 1)).toISOString();
-    const [updated] = await db.update(paths).set({ ...patch, ...derived, searchText: searchText({ ...row, ...patch }), updatedAt }).where(eq(paths.id, row.id)).returning();
-    if (!updated) throw new HTTPException(404, { message: "Not found" });
+    const updated = await db.transaction(async (tx) => {
+      const [row] = await tx.select().from(paths).where(eq(paths.id, c.req.param("id")));
+      if (!row) throw new HTTPException(404, { message: "Not found" });
+      authorize(row, c.req.header("X-Edit-Key"), c.req.header("Authorization"));
+      const derived = patch.data !== undefined ? derive(patch.data) : {};
+      const updatedAt = new Date(Math.max(Date.now(), Date.parse(row.updatedAt) + 1)).toISOString();
+      const [written] = await tx.update(paths).set({ ...patch, ...derived, searchText: searchText({ ...row, ...patch }), updatedAt })
+        .where(eq(paths.id, row.id)).returning();
+      return written;
+    });
     return c.json(toRecord(updated));
   });
 

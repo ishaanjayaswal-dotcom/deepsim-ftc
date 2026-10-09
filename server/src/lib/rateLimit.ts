@@ -44,8 +44,11 @@ export function createRateLimiter({
 }
 
 export function canonicalIp(ip: string): string {
+  ip = ip.replace(/%.*$/, "");
   if (isIP(ip) !== 6) return ip;
-  const canonical = new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+  let canonical: string;
+  try { canonical = new URL(`http://[${ip}]/`).hostname.slice(1, -1); }
+  catch { return ip; }
   const mapped = /^::ffff:([0-9a-f]+):([0-9a-f]+)$/.exec(canonical);
   if (!mapped) return canonical;
   const high = parseInt(mapped[1], 16);
@@ -56,7 +59,8 @@ export function canonicalIp(ip: string): string {
 export function clientIp(c: Context, trustProxy: boolean): string {
   if (trustProxy) {
     const forwarded = c.req.header("X-Forwarded-For")?.split(",").at(-1)?.trim();
-    if (forwarded && isIP(forwarded)) return canonicalIp(forwarded);
+    // The trusted proxy must append a bare IP, rather than ip:port.
+    if (forwarded && isIP(forwarded.replace(/%.*$/, ""))) return canonicalIp(forwarded);
   }
   // app.request() has no Node socket; all such requests share a test identity.
   if (!c.env?.incoming && !c.env?.server?.incoming) return "unknown";

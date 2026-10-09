@@ -42,7 +42,11 @@ describe("paths API contract", () => {
     for (let i = 1; i < rows.length; i++) {
       expect(rows[i - 1].createdAt >= rows[i].createdAt).toBe(true);
     }
-    rows.forEach(assertNoEditKeyLeak);
+    rows.forEach((row: { stats: { alliance: string } }) => {
+      assertNoEditKeyLeak(row);
+      expect(row).not.toHaveProperty("data");
+      expect(["red", "blue"]).toContain(row.stats.alliance);
+    });
   });
 
   it("sort=top orders by upvotes then created_at", async () => {
@@ -354,6 +358,7 @@ describe("paths API contract", () => {
     list.forEach(assertNoEditKeyLeak);
     const one = await (await ctx.app.request(`/api/paths/${list[0].id}`)).json();
     assertNoEditKeyLeak(one);
+    expect(one.data).toBeTruthy();
   });
 });
 
@@ -410,6 +415,7 @@ describe("F1 data regressions", () => {
     const [stored] = await ctx.db.select().from(paths).where(eq(paths.id, row.id));
     await ctx.db.insert(paths).values(Array.from({ length: 100 }, (_, i) => ({ ...stored, id: `limit-${i}` })));
     expect(await (await ctx.app.request("/api/paths")).json()).toHaveLength(50);
+    expect(await (await ctx.app.request("/api/paths?limit=")).json()).toHaveLength(50);
     expect(await (await ctx.app.request("/api/paths?limit=100")).json()).toHaveLength(100);
     expect((await ctx.app.request("/api/paths?limit=101")).status).toBe(400);
   });

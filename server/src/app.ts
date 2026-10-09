@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { logSafeError } from "./lib/errors.js";
+import type { Context } from "hono";
 import { existsSync } from "node:fs";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
@@ -13,17 +14,25 @@ export type AppDeps = { db: Db; config: Config; limiter?: RateLimiter | false };
 
 export function createApp({ db, config, limiter = createRateLimiter() }: AppDeps): Hono {
   const app = new Hono();
+  const loggedByMiddleware = new WeakSet<Context>();
 
-  app.use("*", async (c, next) => {
-    const start = performance.now();
+  const headers = (c: Context) => {
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "strict-origin-when-cross-origin");
     c.header("X-Frame-Options", "DENY");
-    await next();
+  };
+  const log = (c: Context, start: number) => {
     if (!c.req.path.startsWith("/assets/")) {
-      // No query string, headers or request/response bodies (credentials live there).
-      console.log(`${c.req.method} ${c.req.path.replace(/[\x00-\x1f\x7f]/g, "?")} ${c.res.status} ${(performance.now() - start).toFixed(1)}ms`);
+      // No query string, headers or bodies (credentials live there).
+      console.log(`${c.req.method} ${c.req.path.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "?")} ${c.res.status} ${(performance.now() - start).toFixed(1)}ms`);
     }
+  };
+  app.use("*", async (c, next) => {
+    const start = performance.now();
+    loggedByMiddleware.add(c);
+    headers(c);
+    await next();
+    log(c, start);
   });
 
   if (config.corsOrigins.length > 0) {
@@ -50,7 +59,7 @@ export function createApp({ db, config, limiter = createRateLimiter() }: AppDeps
   const api = new Hono();
 
   api.use("*", async (c, next) => {
-    if (c.req.method === "GET" && c.req.path !== "/api/health") return rateLimit(limiter, "read", config.trustProxy)(c, next);
+    if ((c.req.method === "GET" || c.req.method === "HEAD") && c.req.path !== "/api/health") return rateLimit(limiter, "read", config.trustProxy)(c, next);
     await next();
   });
 
@@ -78,14 +87,17 @@ export function createApp({ db, config, limiter = createRateLimiter() }: AppDeps
     if (err instanceof HTTPException && err.status < 500) {
       return c.json({ error: err.message }, err.status);
     }
-    const errorId = randomUUID();
-    // Drizzle messages embed SQL and parameters. Log the underlying cause instead.
-    const detail = err.cause instanceof Error ? err.cause : err;
-    const message = /^Failed query:/i.test(detail.message)
-      ? "Database query failed"
-      : detail.message.split(/\n(?:Failed query:|params:)/i)[0];
-    console.error(JSON.stringify({ errorId, name: detail.name, message }));
+    logSafeError(err);
     return c.json({ error: "Internal server error" }, err instanceof HTTPException ? err.status : 500);
+  });
+
+  app.notFound((c) => {
+    // Hono's wildcard match can skip middleware for decoded newlines.
+    headers(c);
+    const response = c.json({ error: "Not found" }, 404);
+    c.res = response;
+    if (!loggedByMiddleware.has(c)) log(c, performance.now());
+    return response;
   });
 
   return app;
