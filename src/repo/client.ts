@@ -11,19 +11,31 @@ const VOTED_KEY = "deepsim.voted.v1";
 const VOTER_KEY = "deepsim.voterId.v1";
 const IMPORTED_KEY = "deepsim.imported.v1";
 
+// Mirror of everything written, so edit keys and votes survive the session even when localStorage is blocked.
+const memory = new Map<string, string>();
+
 function readJson<T>(key: string, fallback: T): T {
+  let raw: string | null | undefined;
   try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
+    raw = localStorage.getItem(key);
+  } catch {
+    /* storage blocked */
+  }
+  raw ??= memory.get(key);
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
   } catch {
     return fallback;
   }
 }
 function writeJson(key: string, value: unknown) {
+  const raw = JSON.stringify(value);
+  memory.set(key, raw);
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(key, raw);
   } catch {
-    /* storage full or blocked — the session still works */
+    /* storage full or blocked — the in-memory copy keeps the session working */
   }
 }
 
@@ -62,6 +74,9 @@ const votes = {
 
 /* ------------------------------ HTTP adapter ------------------------------ */
 
+const PAGE = 100;
+const MAX_LIST = 1000;
+
 export class HttpPathRepository implements PathRepository {
   readonly kind = "http" as const;
   constructor(private base: string) {}
@@ -89,13 +104,19 @@ export class HttpPathRepository implements PathRepository {
     return key ? { "X-Edit-Key": key } : {};
   }
 
-  list(query: ListQuery = {}) {
-    const qs = new URLSearchParams();
-    if (query.q) qs.set("q", query.q);
-    if (query.category) qs.set("category", query.category);
-    if (query.sort) qs.set("sort", query.sort);
-    const s = qs.toString();
-    return this.req<PathRecord[]>(`/paths${s ? `?${s}` : ""}`);
+  /** Pages through the server's results (100 per request), up to MAX_LIST rows. */
+  async list(query: ListQuery = {}) {
+    const rows: PathRecord[] = [];
+    while (rows.length < MAX_LIST) {
+      const qs = new URLSearchParams({ limit: String(PAGE), offset: String(rows.length) });
+      if (query.q) qs.set("q", query.q);
+      if (query.category) qs.set("category", query.category);
+      if (query.sort) qs.set("sort", query.sort);
+      const page = await this.req<PathRecord[]>(`/paths?${qs}`);
+      rows.push(...page);
+      if (page.length < PAGE) break;
+    }
+    return rows;
   }
   get(id: string) {
     return this.req<PathRecord>(`/paths/${encodeURIComponent(id)}`);
