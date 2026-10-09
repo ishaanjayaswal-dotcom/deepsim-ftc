@@ -1,8 +1,17 @@
 {
-  "name": "ftc-dsim",
-  "private": true,
+  "name": "deepsim-ftc",
   "version": "0.1.0",
+  "private": true,
+  "description": "3D physics simulator for the FIRST Tech Challenge Into The Deep season: Pedro-style paths, a rule-based grader and a community path hub.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ishaanjayaswal-dotcom/deepsim-ftc.git"
+  },
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "concurrently -n web,server -c blue,green \"npm run dev:web\" \"npm run dev:server\"",
     "dev:web": "vite",
