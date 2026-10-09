@@ -10,7 +10,12 @@ const CHUNKS: [RegExp, string][] = [
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  server: { port: 5188 },
+  server: {
+    port: 5188,
+    proxy: {
+      "/api": { target: "http://127.0.0.1:8787", changeOrigin: true },
+    },
+  },
   build: {
     chunkSizeWarningLimit: 4000,
     rollupOptions: {
@@ -19,5 +24,8 @@ export default defineConfig({
       },
     },
   },
-  test: { environment: "node" },
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts", "server/**/*.test.ts"],
+  },
 } as never);
