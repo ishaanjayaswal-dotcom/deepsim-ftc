@@ -78,8 +78,21 @@ export function relaxedJsonToStrict(src: string): string {
   return out;
 }
 
-function lineOfPosition(text: string, pos: number) {
-  return text.slice(0, pos).split("\n").length;
+function newlineOffsets(text: string): number[] {
+  const offsets: number[] = [];
+  for (let i = 0; i < text.length; i++) if (text[i] === "\n") offsets.push(i);
+  return offsets;
+}
+
+function lineOfPosition(offsets: number[], pos: number) {
+  let low = 0;
+  let high = offsets.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (offsets[mid] < pos) low = mid + 1;
+    else high = mid;
+  }
+  return low + 1;
 }
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -93,9 +106,10 @@ function toVec(v: unknown): Vec2 | null {
 /** Find the editor line where waypoint `idx` starts, for inline error markers. */
 function waypointLines(text: string): number[] {
   const lines: number[] = [];
+  const offsets = newlineOffsets(text);
   const re = /\{[^{}]*?\b"?x"?\s*:/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) lines.push(lineOfPosition(text, m.index));
+  while ((m = re.exec(text))) lines.push(lineOfPosition(offsets, m.index));
   return lines;
 }
 
@@ -128,7 +142,7 @@ export function parsePath(input: string): ParseResult {
     const msg = (e as Error).message;
     const pos = msg.match(/position (\d+)/);
     const lineCol = msg.match(/line (\d+)/);
-    const line = lineCol ? Number(lineCol[1]) : pos ? lineOfPosition(strict, Number(pos[1])) : undefined;
+    const line = lineCol ? Number(lineCol[1]) : pos ? lineOfPosition(newlineOffsets(strict), Number(pos[1])) : undefined;
     return { spec: null, issues: [{ severity: "error", message: `Syntax: ${msg.replace(/^JSON\.parse: /, "")}`, line }] };
   }
 

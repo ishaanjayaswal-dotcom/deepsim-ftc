@@ -2,6 +2,8 @@ import { createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "./schema.js";
 
+// :memory: URLs are for tests only: libsql uses one connection, so reads
+// overlapping a transaction are unsupported. Use a file database for serving.
 export async function createDb(url: string, authToken?: string) {
   const local = url.startsWith("file:");
   // timeout also applies to any additional connections opened by the local pool.
@@ -9,7 +11,17 @@ export async function createDb(url: string, authToken?: string) {
   try {
     if (local) {
       await client.execute("PRAGMA busy_timeout = 5000");
-      await client.execute("PRAGMA journal_mode = WAL");
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const mode = await client.execute("PRAGMA journal_mode");
+          if (mode.rows[0][0] !== "wal") await client.execute("PRAGMA journal_mode = WAL");
+          break;
+        } catch (error) {
+          const code = (error as { code?: string }).code;
+          if (!code || !/^(SQLITE_BUSY|SQLITE_LOCKED)(_|$)/.test(code) || attempt >= 49) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
     }
     const db = drizzle(client, { schema });
     if (local) {

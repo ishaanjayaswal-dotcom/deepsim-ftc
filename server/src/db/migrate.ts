@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { deriveFromSource } from "../../../src/repo/derive.js";
+import { decodeDataString, relaxedJsonToStrict } from "../../../src/path/parser.js";
 import type { Db } from "./client.js";
 
 export function migrationsFolder(): string {
@@ -43,9 +44,21 @@ export async function runMigrations(db: Db): Promise<void> {
       if (row.searchText !== normalized) update.searchText = normalized;
       const stats = JSON.parse(row.stats);
       if (stats?.alliance !== "red" && stats?.alliance !== "blue") {
-        const derived = deriveFromSource(row.data);
-        update.stats = JSON.stringify(derived.stats);
-        update.thumbnail = derived.thumbnail;
+        try {
+          const derived = deriveFromSource(row.data);
+          update.stats = JSON.stringify(derived.stats);
+          update.thumbnail = derived.thumbnail;
+        } catch {
+          // Upgrade preserves legacy sources and their derived fields. Writes
+          // still use strict derivation; only the missing alliance is repaired.
+          let alliance = "red";
+          try {
+            const source = JSON.parse(relaxedJsonToStrict(decodeDataString(row.data) ?? row.data));
+            if (source?.alliance === "blue") alliance = "blue";
+          } catch { /* Unparseable legacy sources default to red. */ }
+          update.stats = JSON.stringify({ ...stats, alliance });
+          console.error(JSON.stringify({ message: "Legacy path backfill skipped", rowId: row.id }));
+        }
       }
       if (Object.keys(update).length) await tx.update(paths).set(update).where(eq(paths.id, row.id));
     }

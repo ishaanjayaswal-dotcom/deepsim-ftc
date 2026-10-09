@@ -2,7 +2,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 
 const metadata = (allowNewline = false) => z.string().refine(
-  (value) => !(allowNewline ? /[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]/ : /[\x00-\x1f\x7f-\x9f\u2028\u2029]/).test(value),
+  (value) => !(allowNewline ? /[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/ : /[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/).test(value),
   "Control characters are not allowed",
 ).transform((value) => value.trim());
 
