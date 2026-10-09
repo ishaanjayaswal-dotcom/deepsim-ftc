@@ -70,8 +70,8 @@ All settings are environment variables and all are optional. See [`.env.example`
 | `DATABASE_URL` | `file:./data/deepsim.db` | libSQL URL: a local SQLite file, or a `libsql://` [Turso](https://turso.tech) database |
 | `DATABASE_AUTH_TOKEN` | – | Turso auth token |
 | `ADMIN_KEY` | – | Moderator key (16+ characters): `Authorization: Bearer <key>` can edit or delete any path |
-| `CORS_ORIGIN` | – | Comma-separated origins allowed to call the API from another site |
-| `TRUST_PROXY` | `false` | Take the client IP from `X-Forwarded-For` (only behind a proxy you control) |
+| `CORS_ORIGIN` | – | Comma-separated origins allowed to call the API from another site (`*` is not supported) |
+| `TRUST_PROXY` | `false` | Take the client IP from the last `X-Forwarded-For` entry. Set it only when the server sits behind exactly one reverse proxy you control |
 | `SEED` | `true` | Add the starter paths when the database is empty |
 | `STATIC_DIR` | `dist` | Built web app to serve |
 
@@ -169,7 +169,7 @@ The server is [Hono](https://hono.dev) + [Drizzle ORM](https://orm.drizzle.team)
 | POST | `/api/paths/:id/upvote` | Header `X-Voter-Id` (an anonymous per-browser id). One vote per voter |
 
 The server recomputes each path's thumbnail, length, duration and grade from its source, so cards can't be faked.
-Edit keys are stored only as hashes. Writes are rate limited per IP.
+Edit keys are stored only as hashes. Requests are rate limited per IP. Lists return 50 paths by default and at most 100 per page.
 
 ## Project layout
 
