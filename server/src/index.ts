@@ -1,3 +1,4 @@
+import { logSafeError } from "./lib/errors.js";
 import { createShutdown } from "./lib/shutdown.js";
 import { serve } from "@hono/node-server";
 import { mkdir } from "node:fs/promises";
@@ -18,7 +19,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   await ensureDataDir(config.databaseUrl);
 
-  const db = createDb(config.databaseUrl, config.databaseAuthToken);
+  const db = await createDb(config.databaseUrl, config.databaseAuthToken);
   try {
     await runMigrations(db);
     await seedIfEmpty(db, config.seed);
@@ -47,6 +48,6 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   if (err instanceof ConfigError) err.lines.forEach((line) => console.error(line));
-  else console.error(err);
+  else logSafeError(err);
   process.exit(1);
 });

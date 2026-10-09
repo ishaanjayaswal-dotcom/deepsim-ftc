@@ -32,7 +32,21 @@ export type Derived = { thumbnail: string; stats: PathStats };
 export function deriveFromSource(source: string): Derived {
   const parsed = parsePath(source);
   if (!parsed.spec) throw new Error(parsed.issues.find((i) => i.severity === "error")?.message ?? "Path does not parse");
+  // A Bezier's control polygon bounds its arc length without sampling it.
+  let lengthBound = 0;
+  for (let i = 1; i < parsed.spec.waypoints.length; i++) {
+    const from = parsed.spec.waypoints[i - 1];
+    const to = parsed.spec.waypoints[i];
+    const points = [from, ...(to.type === "bezier" ? to.controlPoints ?? [] : []), to];
+    for (let j = 1; j < points.length; j++) {
+      lengthBound += Math.hypot(points[j].x - points[j - 1].x, points[j].y - points[j - 1].y);
+      if (lengthBound > 5_000) throw new Error("Path is too long");
+    }
+  }
   const compiled = compilePath(parsed.spec);
+  // Tiny positive motion constraints can produce an enormous (or infinite)
+  // duration; the grader samples time too, so bound that work before grading.
+  if (!Number.isFinite(compiled.duration) || compiled.duration > 10_000) throw new Error("Path duration is too long");
   const oppSpec = opponentSpec(REFERENCE_OPPONENT, parsed.spec);
   const evaluation = evaluatePath(compiled, DEFAULT_ROBOT, oppSpec ? compilePath(oppSpec) : null);
   return {

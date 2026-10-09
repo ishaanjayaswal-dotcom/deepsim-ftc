@@ -141,6 +141,13 @@ export function parsePath(input: string): ParseResult {
   if (!Array.isArray(list)) {
     return { spec: null, issues: [{ severity: "error", message: "Missing `path` array (also accepts `waypoints` or `points`)." }] };
   }
+  if (list.length > 200) {
+    return { spec: null, issues: [{ severity: "error", message: "A path must have at most 200 waypoints." }] };
+  }
+  const withinBounds = (p: Vec2) => p.x >= -72 && p.x <= 216 && p.y >= -72 && p.y <= 216;
+  const checkBounds = (p: Vec2, where: string, line?: number) => {
+    if (!withinBounds(p)) issues.push({ severity: "error", message: `${where} is off the field (coordinates must be -72–216 inches).`, where, line });
+  };
   const wpLines = waypointLines(source);
   const radians = root.headingUnits === "rad" || root.headingUnits === "radians";
 
@@ -173,6 +180,7 @@ export function parsePath(input: string): ParseResult {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       const v = toVec(item);
       if (v) {
+        checkBounds(v, where, line);
         waypoints.push({ ...v, heading: lastHeading });
         return;
       }
@@ -193,15 +201,18 @@ export function parsePath(input: string): ParseResult {
     lastHeading = heading;
 
     const wp: Waypoint = { x: o.x, y: o.y, heading };
+    checkBounds(wp, where, line);
 
     let cps: Vec2[] = [];
     if (o.controlPoints !== undefined) {
       if (!Array.isArray(o.controlPoints)) {
         issues.push({ severity: "error", message: `${where}.controlPoints must be an array of [x, y] or {x, y}.`, where, line });
+      } else if (o.controlPoints.length > 16) {
+        issues.push({ severity: "error", message: `${where}.controlPoints must have at most 16 points.`, where, line });
       } else {
         o.controlPoints.forEach((cp, ci) => {
           const v = toVec(cp);
-          if (v) cps.push(v);
+          if (v) { checkBounds(v, `${where}.controlPoints[${ci}]`, line); cps.push(v); }
           else issues.push({ severity: "error", message: `${where}.controlPoints[${ci}] is not a point.`, where, line });
         });
       }
@@ -243,8 +254,8 @@ export function parsePath(input: string): ParseResult {
       else issues.push({ severity: "error", message: `${where}.action "${String(o.action)}" is not one of ${PATH_ACTIONS.join(", ")}.`, where, line });
     }
     if (o.wait !== undefined) {
-      if (isNum(o.wait) && o.wait >= 0) wp.wait = o.wait;
-      else issues.push({ severity: "error", message: `${where}.wait must be seconds ≥ 0.`, where, line });
+      if (isNum(o.wait) && o.wait >= 0 && o.wait <= 30) wp.wait = o.wait;
+      else issues.push({ severity: "error", message: `${where}.wait must be 0–30 seconds.`, where, line });
     }
     if (o.stop !== undefined) wp.stop = Boolean(o.stop);
     if (o.extend !== undefined) {

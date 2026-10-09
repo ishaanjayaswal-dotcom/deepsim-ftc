@@ -74,6 +74,14 @@ describe("server hardening", () => {
         nodeBindings("198.51.100.12"),
       );
       expect(upvoteOk.status).toBe(200);
+      await assertLimited(await ctx.app.request(`/api/paths/${id}`, {
+        method: "DELETE", headers: { "X-Edit-Key": editKey },
+      }, nodeBindings("198.51.100.11")));
+      expect((await ctx.app.request(`/api/paths/${id}`, {}, nodeBindings("198.51.100.13"))).status).toBe(200);
+      expect((await ctx.app.request(`/api/paths/${id}`, {
+        method: "DELETE", headers: { "X-Edit-Key": editKey },
+      }, nodeBindings("198.51.100.14"))).status).toBe(204);
+      expect((await ctx.app.request(`/api/paths/${id}`, {}, nodeBindings("198.51.100.15"))).status).toBe(404);
       await assertLimited(
         await ctx.app.request(
           `/api/paths/${id}/upvote`,
@@ -221,7 +229,7 @@ describe("server hardening", () => {
 
   describe("generic 500 responses", () => {
     it("hides internal errors from clients", async () => {
-      const db = createDb("file::memory:");
+      const db = await createDb("file::memory:");
       await migrate(db, { migrationsFolder: "server/drizzle" });
       const config = loadConfig({ SEED: "false" });
       let fail = true;
@@ -285,6 +293,7 @@ describe("F1 audit regressions", () => {
       const blocked = await ctx.app.request("/api/paths");
       expect(blocked.status).toBe(429);
       expect(blocked.headers.get("Retry-After")).toBeTruthy();
+      expect((await ctx.app.request("/api/paths", { method: "HEAD" })).status).toBe(429);
       expect((await ctx.app.request("/api/health")).status).toBe(200);
     } finally { ctx.close(); }
   });
@@ -296,17 +305,26 @@ describe("F1 audit regressions", () => {
     });
     const db = withFailingSelect(ctx.db, () => { throw failure; });
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errors = await import("../src/lib/errors.js");
+    const format = vi.spyOn(errors, "logSafeError");
     try {
-      const app = createApp({ db, config: ctx.config, limiter: false });
+      console.error("unrelated setup warning");
+      const app = createApp({ db, config: { ...ctx.config, staticDir: "server/test/no-built-static" }, limiter: false });
       const res = await app.request("/api/paths");
       expect(await res.json()).toEqual({ error: "Internal server error" });
-      const entry = JSON.parse(log.mock.calls[0][0]);
+      const entries = () => log.mock.calls.flatMap(([line]) => {
+        try { const entry = JSON.parse(String(line)); return entry.errorId ? [entry] : []; }
+        catch { return []; }
+      });
+      const loggedIds = () => new Set(format.mock.results.filter((result) => result.type === "return").map((result) => result.value));
+      const entry = entries().find((entry) => loggedIds().has(entry.errorId));
       expect(entry).toEqual({ errorId: expect.stringMatching(/^[a-f0-9-]{36}$/), name: "Error", message: "SQLITE_BUSY: database is locked" });
       expect(JSON.stringify(log.mock.calls)).not.toContain("secret");
       const noCause = withFailingSelect(ctx.db, () => { throw new Error("Failed query: insert secret\nparams: secret-edit-hash"); });
       const fallback = createApp({ db: noCause, config: ctx.config, limiter: false });
       expect((await fallback.request("/api/paths")).status).toBe(500);
-      expect(JSON.parse(log.mock.calls[1][0]).message).toBe("Database query failed");
+      const fallbackEntry = entries().find((candidate) => loggedIds().has(candidate.errorId) && candidate.errorId !== entry.errorId);
+      expect(fallbackEntry?.message).toBe("Database query failed");
       expect(JSON.stringify(log.mock.calls)).not.toContain("secret");
     } finally { ctx.close(); }
   });
@@ -370,7 +388,7 @@ describe("F1 boot and seed regressions", () => {
     try {
       const source = `import {createDb} from ${JSON.stringify(pathToFileURL(resolve("server/src/db/client.ts")).href)};
         import {runMigrations} from ${JSON.stringify(pathToFileURL(resolve("server/src/db/migrate.ts")).href)};
-        const db=createDb(${JSON.stringify(`file:${join(dir, "test.sqlite")}`)});
+        const db=await createDb(${JSON.stringify(`file:${join(dir, "test.sqlite")}`)});
         await runMigrations(db);
         const result=await db.$client.execute("select name from sqlite_master where type='table' order by name");
         console.log(JSON.stringify(result.rows)); db.$client.close();`;
@@ -394,7 +412,7 @@ describe("F1 boot and seed regressions", () => {
     const { runMigrations } = await import("../src/db/migrate.js");
     const { paths } = await import("../src/db/schema.js");
     const dir = mkdtempSync(join(tmpdir(), "deepsim-old-schema-"));
-    const db = createDb("file::memory:");
+    const db = await createDb("file::memory:");
     try {
       mkdirSync(join(dir, "meta"));
       const journal = JSON.parse(readFileSync("server/drizzle/meta/_journal.json", "utf8"));
@@ -402,7 +420,7 @@ describe("F1 boot and seed regressions", () => {
       writeFileSync(join(dir, "meta/_journal.json"), JSON.stringify(journal));
       copyFileSync(`server/drizzle/${journal.entries[0].tag}.sql`, join(dir, `${journal.entries[0].tag}.sql`));
       await migrate(db, { migrationsFolder: dir });
-      await db.$client.execute({ sql: "INSERT INTO paths (id,name,team_number,category,description,data,thumbnail,stats,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)", args: ["old", "ÜNÏCODE", 12345, "Élite", "ΩMEGA", "source", "thumb", "{}", "2026-01-01", "2026-01-01"] });
+      await db.$client.execute({ sql: "INSERT INTO paths (id,name,team_number,category,description,data,thumbnail,stats,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)", args: ["old", "ÜNÏCODE", 12345, "Élite", "ΩMEGA", validDraft().data, "thumb", "{}", "2026-01-01", "2026-01-01"] });
       await runMigrations(db);
       const [row] = await db.select().from(paths);
       expect(row.searchText).toBe("ünïcode\nωmega\nélite\n12345");

@@ -75,3 +75,58 @@ describe("data strings", () => {
     expect(r.spec?.name).toBe("Specimen Cycle · Red");
   });
 });
+
+describe("parser work bounds", () => {
+  const source = (end: unknown, start: unknown = { x: 0, y: 0 }) => JSON.stringify({ path: [start, end] });
+  const rejects = (text: string, message: RegExp) => {
+    const parsed = parsePath(text);
+    expect(parsed.spec).toBeNull();
+    expect(parsed.issues.some((issue) => issue.severity === "error" && message.test(issue.message))).toBe(true);
+  };
+
+  it("bounds both coordinates for object and shorthand waypoints", () => {
+    for (const value of [-72.01, 216.01, 1e9]) {
+      rejects(source({ x: value, y: 0 }), /off the field/);
+      rejects(source({ x: 0, y: value }), /off the field/);
+      rejects(source([value, 0]), /off the field/);
+      rejects(source([0, value]), /off the field/);
+    }
+    expect(parsePath(source({ x: 216, y: -72 }, [-72, 216])).spec).not.toBeNull();
+  });
+
+  it("bounds control points even when they would be ignored", () => {
+    for (const cp of [[217, 0], [0, -73], { x: -73, y: 0 }, { x: 0, y: 217 }]) {
+      rejects(source({ x: 10, y: 0, controlPoints: [cp] }), /off the field/);
+      rejects(source({ x: 10, y: 0, type: "line", controlPoints: [cp] }), /off the field/);
+      rejects(source({ x: 10, y: 0 }, { x: 0, y: 0, controlPoints: [cp] }), /off the field/);
+    }
+  });
+
+  it("caps waypoints at 200", () => {
+    const path = Array.from({ length: 200 }, () => ({ x: 0, y: 0 }));
+    expect(parsePath(JSON.stringify({ path })).spec?.waypoints).toHaveLength(200);
+    rejects(JSON.stringify({ path: [...path, path[0]] }), /200 waypoints/);
+  });
+
+  it("caps control points per segment at 16", () => {
+    const controlPoints = Array.from({ length: 16 }, () => [5, 5]);
+    expect(parsePath(source({ x: 10, y: 0, controlPoints })).spec).not.toBeNull();
+    rejects(source({ x: 10, y: 0, controlPoints: [...controlPoints, [5, 5]] }), /16 points/);
+  });
+
+  it("caps wait at 30 seconds and extend at 30 inches", () => {
+    expect(parsePath(source({ x: 10, y: 0, wait: 30, extend: 30 })).spec).not.toBeNull();
+    for (const value of [-1, 30.01, 1e9]) {
+      rejects(source({ x: 10, y: 0, wait: value }), /wait.*0–30 seconds/);
+      rejects(source({ x: 10, y: 0, extend: value }), /extend.*0–30 inches/);
+    }
+  });
+
+  it("preserves all preset sources without parse issues", () => {
+    for (const preset of PRESETS) {
+      const parsed = parsePath(presetSource(preset.id));
+      expect(parsed.spec).not.toBeNull();
+      expect(parsed.issues).toEqual([]);
+    }
+  });
+});

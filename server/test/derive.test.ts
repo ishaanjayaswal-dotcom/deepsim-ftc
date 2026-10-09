@@ -20,6 +20,7 @@ function browserDerived(source: string) {
       durationS: Math.round(compiled.duration * 10) / 10,
       segments: compiled.segments.length,
       grade: evaluation.grade,
+      alliance: parsed.spec.alliance,
     },
   };
 }
@@ -47,5 +48,26 @@ describe("deriveFromSource", () => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message.length).toBeGreaterThan(3);
     }
+  });
+});
+
+describe("derive work bounds", () => {
+  it("rejects huge durations from tiny constraints before grading", () => {
+    for (const maxAccel of [1e-12, 1e-300]) {
+      const source = JSON.stringify({ constraints: { maxAccel }, path: [{ x: 0, y: 0 }, { x: 10, y: 0 }] });
+      expect(() => deriveFromSource(source)).toThrow("Path duration is too long");
+    }
+  });
+
+  it("rejects excessive chord length before compiling", () => {
+    const source = JSON.stringify({ path: Array.from({ length: 40 }, (_, i) => ({ x: i % 2 ? 144 : 0, y: 0 })) });
+    expect(() => deriveFromSource(source)).toThrow("Path is too long");
+  });
+
+  it("uses the control polygon, rather than just endpoint distance", () => {
+    const source = JSON.stringify({ path: Array.from({ length: 3 }, (_, i) => ({
+      x: 0, y: 0, ...(i ? { type: "bezier", controlPoints: Array.from({ length: 16 }, (_, j) => [j % 2 ? -72 : 216, 0]) } : {}),
+    })) });
+    expect(() => deriveFromSource(source)).toThrow("Path is too long");
   });
 });
