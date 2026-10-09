@@ -1,7 +1,7 @@
 import { parsePath } from "../path/parser";
 import { deriveFromSource } from "./derive";
 import { SEED_PATHS } from "./seed";
-import type { CreatedPathRecord, ListQuery, PathDraft, PathPatch, PathRecord, PathRepository } from "./types";
+import type { CreatedPathRecord, ListQuery, PathDraft, PathPatch, PathRecord, PathRepository, PathSummary } from "./types";
 
 /* ------------------------------ Browser storage ------------------------------ */
 
@@ -106,13 +106,13 @@ export class HttpPathRepository implements PathRepository {
 
   /** Pages through the server's results (100 per request), up to MAX_LIST rows. */
   async list(query: ListQuery = {}) {
-    const rows: PathRecord[] = [];
+    const rows: PathSummary[] = [];
     while (rows.length < MAX_LIST) {
       const qs = new URLSearchParams({ limit: String(PAGE), offset: String(rows.length) });
       if (query.q) qs.set("q", query.q);
       if (query.category) qs.set("category", query.category);
       if (query.sort) qs.set("sort", query.sort);
-      const page = await this.req<PathRecord[]>(`/paths?${qs}`);
+      const page = await this.req<PathSummary[]>(`/paths?${qs}`);
       rows.push(...page);
       if (page.length < PAGE) break;
     }
@@ -175,7 +175,7 @@ export class LocalPathRepository implements PathRepository {
       rows = rows.filter((r) => `${r.name} ${r.teamNumber} ${r.category} ${r.description}`.toLowerCase().includes(q));
     }
     rows.sort((a, b) => (query.sort === "top" ? b.upvotes - a.upvotes || b.createdAt.localeCompare(a.createdAt) : b.createdAt.localeCompare(a.createdAt)));
-    return this.delay(rows);
+    return this.delay(rows.map(({ data: _data, ...summary }): PathSummary => ({ ...summary, stats: { ...summary.stats, alliance: summary.stats.alliance ?? (parsePath(_data).spec?.alliance ?? "red") } })));
   }
   async get(id: string) {
     const row = this.read().find((r) => r.id === id);

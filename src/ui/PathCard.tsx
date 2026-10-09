@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { encodeDataString } from "../path/parser";
-import type { PathRecord } from "../repo/types";
+import { repository } from "../repo/client";
+import type { PathSummary } from "../repo/types";
 import { useApp } from "../store/app";
 import { IconArrowUp, IconCopy, IconEdit, IconPlay, IconTrash } from "./icons";
 import { PathThumbnail } from "./PathThumbnail";
@@ -25,7 +26,7 @@ export function PathCard({
   onUpvote,
   onDelete,
 }: {
-  record: PathRecord;
+  record: PathSummary;
   canDelete: boolean;
   voted: boolean;
   onExecute: () => void;
@@ -36,12 +37,12 @@ export function PathCard({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const activeId = useApp((s) => s.active.recordId);
-  const alliance = /"alliance"\s*:\s*"blue"|alliance:\s*'blue'/.test(record.data) ? "blue" : "red";
+  const alliance = record.stats.alliance ?? "red";
   const isActive = activeId === record.id;
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(encodeDataString(record.data));
+      await navigator.clipboard.writeText(encodeDataString((await repository.get(record.id)).data));
       useApp.getState().showToast("Data string copied — paste it into any editor", "info");
     } catch {
       useApp.getState().showToast("Clipboard unavailable", "bad");

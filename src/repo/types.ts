@@ -12,7 +12,7 @@ export const STRATEGY_CATEGORIES = [
 
 export type StrategyCategory = (typeof STRATEGY_CATEGORIES)[number] | string;
 
-export type PathStats = { lengthIn: number; durationS: number; segments: number; grade?: string };
+export type PathStats = { lengthIn: number; durationS: number; segments: number; grade?: string; alliance?: "red" | "blue" };
 
 export type PathRecord = {
   id: string;
@@ -30,6 +30,8 @@ export type PathRecord = {
   updatedAt: string;
 };
 
+/** List rows leave out the path source so the hub stays light; fetch the full record to run or edit it. */
+export type PathSummary = Omit<PathRecord, "data">;
 export type PathDraft = Omit<PathRecord, "id" | "createdAt" | "updatedAt" | "upvotes">;
 export type PathPatch = Partial<Omit<PathRecord, "id" | "createdAt">>;
 /** POST /paths answers with the record plus a one-time edit key. */
@@ -39,7 +41,7 @@ export type ListQuery = { q?: string; category?: string; sort?: "new" | "top" };
 
 export interface PathRepository {
   readonly kind: "http" | "local" | "pending";
-  list(query?: ListQuery): Promise<PathRecord[]>;
+  list(query?: ListQuery): Promise<PathSummary[]>;
   get(id: string): Promise<PathRecord>;
   create(draft: PathDraft): Promise<PathRecord>;
   update(id: string, patch: PathPatch): Promise<PathRecord>;

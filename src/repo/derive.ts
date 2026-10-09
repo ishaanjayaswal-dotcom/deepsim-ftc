@@ -42,6 +42,7 @@ export function deriveFromSource(source: string): Derived {
       durationS: Math.round(compiled.duration * 10) / 10,
       segments: compiled.segments.length,
       grade: evaluation.grade,
+      alliance: parsed.spec.alliance,
     },
   };
 }

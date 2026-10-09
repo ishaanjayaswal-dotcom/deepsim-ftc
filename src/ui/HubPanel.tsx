@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { importLocalPaths, localPathsToImport, repository } from "../repo/client";
-import { STRATEGY_CATEGORIES, type PathRecord } from "../repo/types";
+import { STRATEGY_CATEGORIES, type PathSummary } from "../repo/types";
 import { useApp } from "../store/app";
 import { IconSearch, IconUsers } from "./icons";
 import { Segmented, cx } from "./primitives";
@@ -8,7 +8,7 @@ import { PathCard } from "./PathCard";
 
 export function HubPanel() {
   const hubNonce = useApp((s) => s.hubNonce);
-  const [rows, setRows] = useState<PathRecord[] | null>(null);
+  const [rows, setRows] = useState<PathSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("");
@@ -33,16 +33,26 @@ export function HubPanel() {
   }, [load, hubNonce, q]);
 
   const app = useApp.getState;
-  const execute = (r: PathRecord) => {
-    app().loadPath(r.data, { origin: "community", recordId: r.id, teamNumber: r.teamNumber });
-    if (app().issues.some((i) => i.severity === "error")) app().showToast(`"${r.name}" failed to parse`, "bad");
-    else app().showToast(`Executing "${r.name}" · #${r.teamNumber}`, "info");
+  /** List rows carry no source; fetch the full record before running or editing it. */
+  const withSource = async (r: PathSummary, fn: (data: string) => void) => {
+    try {
+      fn((await repository.get(r.id)).data);
+    } catch (e) {
+      app().showToast((e as Error).message, "bad");
+    }
   };
-  const edit = (r: PathRecord) => {
-    useApp.setState({ active: { origin: "community", recordId: r.id, teamNumber: r.teamNumber } });
-    app().setSource(r.data);
-    app().setTab("editor");
-  };
+  const execute = (r: PathSummary) =>
+    withSource(r, (data) => {
+      app().loadPath(data, { origin: "community", recordId: r.id, teamNumber: r.teamNumber });
+      if (app().issues.some((i) => i.severity === "error")) app().showToast(`"${r.name}" failed to parse`, "bad");
+      else app().showToast(`Executing "${r.name}" · #${r.teamNumber}`, "info");
+    });
+  const edit = (r: PathSummary) =>
+    withSource(r, (data) => {
+      useApp.setState({ active: { origin: "community", recordId: r.id, teamNumber: r.teamNumber } });
+      app().setSource(data);
+      app().setTab("editor");
+    });
   const mutate = async (fn: () => Promise<unknown>, ok?: string) => {
     try {
       await fn();
