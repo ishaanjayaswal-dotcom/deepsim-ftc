@@ -161,14 +161,14 @@ The server is [Hono](https://hono.dev) + [Drizzle ORM](https://orm.drizzle.team)
 | Method | Route | Notes |
 | --- | --- | --- |
 | GET | `/api/health` | `{ ok: true, version }` |
-| GET | `/api/paths?q=&category=&sort=new\|top&limit=&offset=` | `PathRecord[]` |
-| GET | `/api/paths/:id` | `PathRecord` |
+| GET | `/api/paths?q=&category=&sort=new\|top&limit=&offset=` | `PathSummary[]`: every field except the path source `data` |
+| GET | `/api/paths/:id` | `PathRecord`, including `data` |
 | POST | `/api/paths` | Body: `name`, `teamNumber`, `category`, `description`, `data`. Returns `201` with the record and a one-time `editKey` |
 | PATCH | `/api/paths/:id` | Header `X-Edit-Key`. Any of the create fields |
 | DELETE | `/api/paths/:id` | Header `X-Edit-Key`. `204` |
 | POST | `/api/paths/:id/upvote` | Header `X-Voter-Id` (an anonymous per-browser id). One vote per voter |
 
-The server recomputes each path's thumbnail, length, duration and grade from its source, so cards can't be faked.
+The server recomputes each path's thumbnail, length, duration and grade from its source, so cards can't be faked. Paths must stay near the field (coordinates from −72 to 216 in) and under 5,000 in long.
 Edit keys are stored only as hashes. Requests are rate limited per IP. Lists return 50 paths by default and at most 100 per page.
 
 ## Project layout
