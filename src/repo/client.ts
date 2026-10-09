@@ -1,7 +1,6 @@
-import { compilePath } from "../path/compile";
 import { parsePath } from "../path/parser";
-import { PRESETS, presetSource } from "../path/presets";
-import type { CompiledPath } from "../path/types";
+import { deriveFromSource } from "./derive";
+import { SEED_PATHS } from "./seed";
 import type { ListQuery, PathDraft, PathPatch, PathRecord, PathRepository } from "./types";
 
 /* ------------------------------ HTTP adapter ------------------------------ */
@@ -135,64 +134,19 @@ function validateDraft(d: Pick<PathRecord, "name" | "teamNumber" | "data">) {
 
 /* ------------------------------ Helpers ------------------------------ */
 
-/** Downsample a compiled path into a 0..100 SVG polyline string (y flipped for screen). */
-export function thumbnailFor(path: CompiledPath, points = 64): string {
-  const s = path.samples;
-  if (!s.length) return "";
-  const step = Math.max(1, Math.floor(s.length / points));
-  const pts: string[] = [];
-  for (let i = 0; i < s.length; i += step) pts.push(`${((s[i].x / 144) * 100).toFixed(1)},${(100 - (s[i].y / 144) * 100).toFixed(1)}`);
-  const last = s[s.length - 1];
-  pts.push(`${((last.x / 144) * 100).toFixed(1)},${(100 - (last.y / 144) * 100).toFixed(1)}`);
-  return pts.join(" ");
-}
+export { thumbnailFor } from "./derive";
 
-export function draftFromSource(source: string, meta: { name: string; teamNumber: number; category: string; description: string }, grade?: string): PathDraft {
-  const parsed = parsePath(source);
-  if (!parsed.spec) throw new Error(parsed.issues.find((i) => i.severity === "error")?.message ?? "Path does not parse");
-  const compiled = compilePath(parsed.spec);
-  return {
-    ...meta,
-    data: source,
-    thumbnail: thumbnailFor(compiled),
-    stats: { lengthIn: Math.round(compiled.totalLength), durationS: Math.round(compiled.duration * 10) / 10, segments: compiled.segments.length, grade },
-  };
+/** Build a publishable draft. Thumbnail, stats and grade always come from the source itself. */
+export function draftFromSource(source: string, meta: { name: string; teamNumber: number; category: string; description: string }): PathDraft {
+  return { ...meta, data: source, ...deriveFromSource(source) };
 }
 
 function seedRecords(): PathRecord[] {
-  const seeds: { preset: string; team: number; desc: string; votes: number; daysAgo: number; name?: string }[] = [
-    { preset: "four-sample", team: 31415, desc: "Preload + 3 spikes. Backs into the basket at 315°, flows the pickups with a single control point.", votes: 42, daysAgo: 2 },
-    { preset: "specimen-cycle", team: 27182, desc: "Three high-chamber clips with two human-player grabs. Bezier returns keep the chamber approach square.", votes: 37, daysAgo: 4 },
-    { preset: "hive-raid", team: 16180, desc: "Colour-sorted sub intake with a 16 in extension — two raids, both into the high basket.", votes: 29, daysAgo: 6 },
-    { preset: "stress", team: 14142, desc: "Tuning fixture. Run it at μ 0.5 to see the follower lose traction and overshoot the stop.", votes: 12, daysAgo: 9 },
-  ];
-  const out: PathRecord[] = [];
-  for (const s of seeds) {
-    const def = PRESETS.find((p) => p.id === s.preset)!;
-    const source = presetSource(s.preset);
-    const draft = draftFromSource(source, { name: (def.body.name as string) ?? def.id, teamNumber: s.team, category: def.category, description: s.desc });
+  return SEED_PATHS.map((s) => {
     const at = new Date(Date.now() - s.daysAgo * 86400000).toISOString();
-    out.push({ ...draft, id: uid(), upvotes: s.votes, createdAt: at, updatedAt: at });
-  }
-  // A park-only starter so the board has a beginner example.
-  const park = `{
-  "name": "Safe Park · Red",
-  "alliance": "red",
-  "preload": "none",
-  "path": [
-    { "x": 9, "y": 40, "heading": 0 },
-    { "x": 12, "y": 13, "heading": 0, "type": "bezier", "controlPoints": [[24, 30]], "action": "park" }
-  ]
-}`;
-  const at = new Date(Date.now() - 12 * 86400000).toISOString();
-  out.push({
-    ...draftFromSource(park, { name: "Safe Park · Red", teamNumber: 17320, category: "Park Only", description: "Three points, zero risk. A rookie-friendly starting template." }),
-    id: uid(),
-    upvotes: 8,
-    createdAt: at,
-    updatedAt: at,
+    const draft = draftFromSource(s.data, { name: s.name, teamNumber: s.teamNumber, category: s.category, description: s.description });
+    return { ...draft, id: uid(), upvotes: s.upvotes, createdAt: at, updatedAt: at };
   });
-  return out;
 }
 
 export function createPathRepository(): PathRepository {

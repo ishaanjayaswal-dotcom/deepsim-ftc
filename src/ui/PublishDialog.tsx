@@ -45,7 +45,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
     if (!Number.isInteger(teamNumber) || teamNumber < 1 || teamNumber > 99999) return setError("Team number must be 1–99999.");
     setBusy(true);
     try {
-      const draft = draftFromSource(source, { name: name.trim(), teamNumber, category, description: description.trim() }, evaluation?.grade);
+      const draft = draftFromSource(source, { name: name.trim(), teamNumber, category, description: description.trim() });
       const rec = updateOriginal && active.recordId ? await repository.update(active.recordId, draft) : await repository.create(draft);
       const app = useApp.getState();
       useApp.setState({ active: { origin: "community", recordId: rec.id, teamNumber: rec.teamNumber } });
