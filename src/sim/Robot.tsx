@@ -41,7 +41,7 @@ export function Robot() {
   const body = useRef<RapierRigidBody>(null);
   const snap = useMemo(() => {
     const s = useApp.getState();
-    return { compiled: s.compiled, mode: s.mode, team: s.active.teamNumber ? String(s.active.teamNumber) : "DSIM", mass: s.robot.massKg };
+    return { compiled: s.compiled, mode: s.mode, team: s.active.teamNumber ? String(s.active.teamNumber) : "DEEP", mass: s.robot.massKg };
   }, []);
   const alliance: Alliance = snap.compiled?.spec.alliance ?? "red";
   const start = snap.compiled?.spec.waypoints[0] ?? { x: 9, y: 64, heading: 0 };

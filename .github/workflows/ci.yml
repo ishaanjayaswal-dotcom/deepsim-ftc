@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Smoke test the production server
+        run: |
+          DATABASE_URL=file:/tmp/deepsim-ci/db.sqlite PORT=8787 npm start &
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:8787/api/health && break; sleep 1; done
+          curl -fs http://127.0.0.1:8787/api/paths | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const n=JSON.parse(s).length;console.log("seeded paths:",n);if(n<1)process.exit(1)})'
+          curl -fs -o /dev/null http://127.0.0.1:8787/
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t deepsim .
+      - name: Smoke test the image
+        run: |
+          docker run -d --name deepsim -p 8787:8787 deepsim
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:8787/api/health && break; sleep 1; done
+          curl -fs http://127.0.0.1:8787/api/health

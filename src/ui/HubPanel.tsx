@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { repository } from "../repo/client";
+import { importLocalPaths, localPathsToImport, repository } from "../repo/client";
 import { STRATEGY_CATEGORIES, type PathRecord } from "../repo/types";
 import { useApp } from "../store/app";
 import { IconSearch, IconUsers } from "./icons";
@@ -13,11 +13,14 @@ export function HubPanel() {
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("");
   const [sort, setSort] = useState<"new" | "top">("top");
+  const [pendingImport, setPendingImport] = useState(0);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
       setRows(await repository.list({ q: q.trim() || undefined, category: category || undefined, sort }));
+      setPendingImport(repository.kind === "http" ? localPathsToImport().length : 0);
     } catch (e) {
       setError((e as Error).message);
       setRows([]);
@@ -49,6 +52,22 @@ export function HubPanel() {
       app().showToast((e as Error).message, "bad");
     }
   };
+
+  const runImport = async () => {
+    setImporting(true);
+    await mutate(async () => {
+      const n = await importLocalPaths(repository);
+      app().showToast(`Copied ${n} path${n === 1 ? "" : "s"} from this browser to the hub`, "good");
+    });
+    setImporting(false);
+  };
+
+  const status =
+    repository.kind === "http"
+      ? { dot: "bg-good", text: "Connected to the community hub" }
+      : repository.kind === "local"
+        ? { dot: "bg-warn", text: "Offline hub — paths are saved in this browser" }
+        : { dot: "bg-dim", text: "Connecting…" };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -87,9 +106,19 @@ export function HubPanel() {
           />
         </div>
         <div className="flex items-center gap-1.5 text-[10.5px] text-dim">
-          <span className={cx("h-1.5 w-1.5 rounded-full", repository.kind === "http" ? "bg-good" : "bg-warn")} />
-          {repository.kind === "http" ? "Connected to the community API" : "Local store — set VITE_PATHS_API to go live"}
+          <span className={cx("h-1.5 w-1.5 rounded-full", status.dot)} />
+          {status.text}
         </div>
+        {pendingImport > 0 && (
+          <div className="flex items-center justify-between gap-2 rounded-lg bg-deep/10 px-2.5 py-2 text-[11.5px] text-muted hairline">
+            <span>
+              {pendingImport} path{pendingImport === 1 ? "" : "s"} saved only in this browser
+            </span>
+            <button type="button" disabled={importing} onClick={runImport} className="font-semibold text-deep hover:underline disabled:opacity-50">
+              {importing ? "Copying…" : "Publish to hub"}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
@@ -107,6 +136,8 @@ export function HubPanel() {
           <PathCard
             key={r.id}
             record={r}
+            canDelete={repository.canEdit(r.id)}
+            voted={repository.hasVoted(r.id)}
             onExecute={() => execute(r)}
             onEdit={() => edit(r)}
             onUpvote={() => mutate(() => repository.upvote(r.id))}
