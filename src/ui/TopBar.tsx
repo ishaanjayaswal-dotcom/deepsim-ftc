@@ -101,7 +101,7 @@ export function TopBar() {
         <Logo />
         <div className="leading-none">
           <div className="flex items-baseline gap-2">
-            <span className="text-[15px] font-bold tracking-tight">DSIM</span>
+            <span className="text-[15px] font-bold tracking-tight">DeepSim</span>
             <span className="text-[11px] font-medium text-muted">FTC Physics Simulator</span>
           </div>
           <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-deep/80">Into The Deep · 2024–25</div>

@@ -32,15 +32,21 @@ export type PathRecord = {
 
 export type PathDraft = Omit<PathRecord, "id" | "createdAt" | "updatedAt" | "upvotes">;
 export type PathPatch = Partial<Omit<PathRecord, "id" | "createdAt">>;
+/** POST /paths answers with the record plus a one-time edit key. */
+export type CreatedPathRecord = PathRecord & { editKey?: string };
 
 export type ListQuery = { q?: string; category?: string; sort?: "new" | "top" };
 
 export interface PathRepository {
-  readonly kind: "http" | "local";
+  readonly kind: "http" | "local" | "pending";
   list(query?: ListQuery): Promise<PathRecord[]>;
   get(id: string): Promise<PathRecord>;
   create(draft: PathDraft): Promise<PathRecord>;
   update(id: string, patch: PathPatch): Promise<PathRecord>;
   remove(id: string): Promise<void>;
   upvote(id: string): Promise<PathRecord>;
+  /** True when this browser may edit or delete the path (it published it, or the store is local). */
+  canEdit(id: string): boolean;
+  /** True when this browser has already upvoted the path. */
+  hasVoted(id: string): boolean;
 }

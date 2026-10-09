@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { draftFromSource, repository, thumbnailFor } from "../repo/client";
+import { deriveFromSource } from "../repo/derive";
 import { STRATEGY_CATEGORIES } from "../repo/types";
 import { useApp } from "../store/app";
 import { IconUpload, IconX } from "./icons";
@@ -30,6 +31,15 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const thumb = useMemo(() => (compiled ? thumbnailFor(compiled) : ""), [compiled]);
+  // The hub grades every card against the same reference opponent, which may differ from the one picked in the sim.
+  const hubGrade = useMemo(() => {
+    try {
+      return deriveFromSource(source).stats.grade;
+    } catch {
+      return undefined;
+    }
+  }, [source]);
+  const canUpdate = Boolean(active.recordId && repository.canEdit(active.recordId));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -46,7 +56,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
     setBusy(true);
     try {
       const draft = draftFromSource(source, { name: name.trim(), teamNumber, category, description: description.trim() });
-      const rec = updateOriginal && active.recordId ? await repository.update(active.recordId, draft) : await repository.create(draft);
+      const rec = updateOriginal && canUpdate && active.recordId ? await repository.update(active.recordId, draft) : await repository.create(draft);
       const app = useApp.getState();
       useApp.setState({ active: { origin: "community", recordId: rec.id, teamNumber: rec.teamNumber } });
       app.bumpHub();
@@ -68,7 +78,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
             <h2 id="publish-title" className="text-[15px] font-semibold">
               Publish to the Community Hub
             </h2>
-            <p className="text-[12px] text-dim">Shared paths are public. Credit teams you build on.</p>
+            <p className="text-[12px] text-dim">Shared paths are public. Only this browser can edit or delete what you publish.</p>
           </div>
           <Button type="button" variant="ghost" className="!px-1.5" onClick={onClose} aria-label="Close">
             <IconX size={16} />
@@ -81,6 +91,11 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
             {evaluation && (
               <div className="mt-2 flex items-center justify-between text-[11px] text-muted">
                 Advocate <Badge tone={scoreTone(evaluation.overall)}>{evaluation.grade} · {evaluation.overall}</Badge>
+              </div>
+            )}
+            {hubGrade && hubGrade !== evaluation?.grade && (
+              <div className="mt-1 text-[10.5px] leading-snug text-dim" title="Hub cards are all graded against the Raider opponent so they compare like for like.">
+                Hub grade {hubGrade} (vs Raider)
               </div>
             )}
             {compiled && (
@@ -108,7 +123,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
             <Field label="Notes for other teams">
               <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} maxLength={280} placeholder="What it does, robot assumptions, tuning tips…" className="input h-auto resize-none py-2" />
             </Field>
-            {active.recordId && (
+            {canUpdate && (
               <label className="flex items-center gap-2 text-[12px] text-muted">
                 <input type="checkbox" checked={updateOriginal} onChange={(e) => setUpdateOriginal(e.target.checked)} className="accent-[#22d3ee]" />
                 Update the original hub entry instead of publishing a copy

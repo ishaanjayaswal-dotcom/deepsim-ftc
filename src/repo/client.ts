@@ -1,7 +1,64 @@
 import { parsePath } from "../path/parser";
 import { deriveFromSource } from "./derive";
 import { SEED_PATHS } from "./seed";
-import type { ListQuery, PathDraft, PathPatch, PathRecord, PathRepository } from "./types";
+import type { CreatedPathRecord, ListQuery, PathDraft, PathPatch, PathRecord, PathRepository } from "./types";
+
+/* ------------------------------ Browser storage ------------------------------ */
+
+const LOCAL_PATHS_KEY = "dsim.paths.v1";
+const EDIT_KEYS_KEY = "deepsim.editKeys.v1";
+const VOTED_KEY = "deepsim.voted.v1";
+const VOTER_KEY = "deepsim.voterId.v1";
+const IMPORTED_KEY = "deepsim.imported.v1";
+
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writeJson(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage full or blocked — the session still works */
+  }
+}
+
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`);
+
+/** Anonymous, per-browser id so the server can count one upvote per visitor. */
+function voterId(): string {
+  let id = readJson<string | null>(VOTER_KEY, null);
+  if (!id || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+    id = uid().replace(/[^A-Za-z0-9_-]/g, "");
+    writeJson(VOTER_KEY, id);
+  }
+  return id;
+}
+
+const editKeys = {
+  all: () => readJson<Record<string, string>>(EDIT_KEYS_KEY, {}),
+  get: (id: string) => editKeys.all()[id],
+  set(id: string, key: string) {
+    writeJson(EDIT_KEYS_KEY, { ...editKeys.all(), [id]: key });
+  },
+  drop(id: string) {
+    const all = editKeys.all();
+    delete all[id];
+    writeJson(EDIT_KEYS_KEY, all);
+  },
+};
+
+const votes = {
+  has: (id: string) => readJson<string[]>(VOTED_KEY, []).includes(id),
+  add(id: string) {
+    const v = readJson<string[]>(VOTED_KEY, []);
+    if (!v.includes(id)) writeJson(VOTED_KEY, [...v, id]);
+  },
+};
 
 /* ------------------------------ HTTP adapter ------------------------------ */
 
@@ -27,6 +84,11 @@ export class HttpPathRepository implements PathRepository {
     return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
   }
 
+  private keyHeader(id: string): Record<string, string> {
+    const key = editKeys.get(id);
+    return key ? { "X-Edit-Key": key } : {};
+  }
+
   list(query: ListQuery = {}) {
     const qs = new URLSearchParams();
     if (query.q) qs.set("q", query.q);
@@ -38,44 +100,47 @@ export class HttpPathRepository implements PathRepository {
   get(id: string) {
     return this.req<PathRecord>(`/paths/${encodeURIComponent(id)}`);
   }
-  create(draft: PathDraft) {
-    return this.req<PathRecord>(`/paths`, { method: "POST", body: JSON.stringify(draft) });
+  async create(draft: PathDraft) {
+    const { editKey, ...record } = await this.req<CreatedPathRecord>(`/paths`, { method: "POST", body: JSON.stringify(draft) });
+    if (editKey) editKeys.set(record.id, editKey);
+    return record;
   }
   update(id: string, patch: PathPatch) {
-    return this.req<PathRecord>(`/paths/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });
+    return this.req<PathRecord>(`/paths/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch), headers: this.keyHeader(id) });
   }
-  remove(id: string) {
-    return this.req<void>(`/paths/${encodeURIComponent(id)}`, { method: "DELETE" });
+  async remove(id: string) {
+    await this.req<void>(`/paths/${encodeURIComponent(id)}`, { method: "DELETE", headers: this.keyHeader(id) });
+    editKeys.drop(id);
   }
-  upvote(id: string) {
-    return this.req<PathRecord>(`/paths/${encodeURIComponent(id)}/upvote`, { method: "POST" });
+  async upvote(id: string) {
+    const rec = await this.req<PathRecord>(`/paths/${encodeURIComponent(id)}/upvote`, { method: "POST", headers: { "X-Voter-Id": voterId() } });
+    votes.add(id);
+    return rec;
+  }
+  canEdit(id: string) {
+    return Boolean(editKeys.get(id));
+  }
+  hasVoted(id: string) {
+    return votes.has(id);
   }
 }
 
 /* ------------------------------ Local adapter ------------------------------ */
 
-const STORAGE_KEY = "dsim.paths.v1";
-
-const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
-
-/** Browser-only stand-in with the exact same contract, so the UI is fully usable without a server. */
+/** Browser-only stand-in with the same contract, so the app is fully usable without a server (e.g. GitHub Pages). */
 export class LocalPathRepository implements PathRepository {
   readonly kind = "local" as const;
   private latency = 120;
 
   private read(): PathRecord[] {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) return JSON.parse(raw) as PathRecord[];
-    } catch {
-      /* corrupted storage — reseed */
-    }
+    const rows = readJson<PathRecord[] | null>(LOCAL_PATHS_KEY, null);
+    if (Array.isArray(rows)) return rows;
     const seeded = seedRecords();
     this.write(seeded);
     return seeded;
   }
   private write(rows: PathRecord[]) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
+    writeJson(LOCAL_PATHS_KEY, rows);
   }
   private delay<T>(v: T): Promise<T> {
     return new Promise((r) => setTimeout(() => r(structuredClone(v)), this.latency));
@@ -88,7 +153,7 @@ export class LocalPathRepository implements PathRepository {
       const q = query.q.toLowerCase();
       rows = rows.filter((r) => `${r.name} ${r.teamNumber} ${r.category} ${r.description}`.toLowerCase().includes(q));
     }
-    rows.sort((a, b) => (query.sort === "top" ? b.upvotes - a.upvotes : b.createdAt.localeCompare(a.createdAt)));
+    rows.sort((a, b) => (query.sort === "top" ? b.upvotes - a.upvotes || b.createdAt.localeCompare(a.createdAt) : b.createdAt.localeCompare(a.createdAt)));
     return this.delay(rows);
   }
   async get(id: string) {
@@ -99,7 +164,7 @@ export class LocalPathRepository implements PathRepository {
   async create(draft: PathDraft) {
     validateDraft(draft);
     const now = new Date().toISOString();
-    const row: PathRecord = { ...draft, id: uid(), upvotes: 0, createdAt: now, updatedAt: now };
+    const row: PathRecord = { ...draft, ...deriveFromSource(draft.data), id: uid(), upvotes: 0, createdAt: now, updatedAt: now };
     this.write([row, ...this.read()]);
     return this.delay(row);
   }
@@ -109,6 +174,7 @@ export class LocalPathRepository implements PathRepository {
     if (i < 0) throw new Error("Path not found");
     rows[i] = { ...rows[i], ...patch, id, updatedAt: new Date().toISOString() };
     validateDraft(rows[i]);
+    if (patch.data !== undefined) Object.assign(rows[i], deriveFromSource(rows[i].data));
     this.write(rows);
     return this.delay(rows[i]);
   }
@@ -120,9 +186,18 @@ export class LocalPathRepository implements PathRepository {
     const rows = this.read();
     const row = rows.find((r) => r.id === id);
     if (!row) throw new Error("Path not found");
-    row.upvotes += 1;
-    this.write(rows);
+    if (!votes.has(id)) {
+      row.upvotes += 1;
+      votes.add(id);
+      this.write(rows);
+    }
     return this.delay(row);
+  }
+  canEdit() {
+    return true;
+  }
+  hasVoted(id: string) {
+    return votes.has(id);
   }
 }
 
@@ -149,9 +224,82 @@ function seedRecords(): PathRecord[] {
   });
 }
 
-export function createPathRepository(): PathRepository {
-  const base = import.meta.env.VITE_PATHS_API as string | undefined;
-  return base ? new HttpPathRepository(base.replace(/\/$/, "")) : new LocalPathRepository();
+/* ------------------------------ Local → server import ------------------------------ */
+
+const seedKey = (r: { name: string; data: string }) => `${r.name}\u0000${r.data}`;
+const SEED_KEYS = new Set(SEED_PATHS.map(seedKey));
+
+/** Paths this browser published to its local store (seeds excluded) that have not been copied to the server yet. */
+export function localPathsToImport(): PathRecord[] {
+  const rows = readJson<PathRecord[]>(LOCAL_PATHS_KEY, []);
+  const done = new Set(readJson<string[]>(IMPORTED_KEY, []));
+  return Array.isArray(rows) ? rows.filter((r) => !SEED_KEYS.has(seedKey(r)) && !done.has(r.id)) : [];
 }
 
-export const repository = createPathRepository();
+export async function importLocalPaths(target: PathRepository): Promise<number> {
+  const done = readJson<string[]>(IMPORTED_KEY, []);
+  let n = 0;
+  for (const r of localPathsToImport()) {
+    await target.create(draftFromSource(r.data, { name: r.name, teamNumber: r.teamNumber, category: r.category, description: r.description }));
+    done.push(r.id);
+    writeJson(IMPORTED_KEY, done);
+    n++;
+  }
+  return n;
+}
+
+/* ------------------------------ Resolution ------------------------------ */
+
+/**
+ * Pick the backend once at startup: an explicit VITE_PATHS_API, else the same-origin `/api` when it answers
+ * a health check, else the browser-local store (static hosting).
+ */
+async function resolveRepository(): Promise<PathRepository> {
+  const explicit = (import.meta.env.VITE_PATHS_API as string | undefined)?.replace(/\/$/, "");
+  if (explicit) return new HttpPathRepository(explicit);
+  const base = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
+  try {
+    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2500) });
+    if (res.ok && (await res.json())?.ok === true) return new HttpPathRepository(base);
+  } catch {
+    /* no server here */
+  }
+  return new LocalPathRepository();
+}
+
+class AutoPathRepository implements PathRepository {
+  private target: PathRepository | null = null;
+  readonly ready: Promise<PathRepository>;
+  constructor() {
+    this.ready = resolveRepository().then((r) => (this.target = r));
+  }
+  get kind() {
+    return this.target?.kind ?? "pending";
+  }
+  list(query?: ListQuery) {
+    return this.ready.then((r) => r.list(query));
+  }
+  get(id: string) {
+    return this.ready.then((r) => r.get(id));
+  }
+  create(draft: PathDraft) {
+    return this.ready.then((r) => r.create(draft));
+  }
+  update(id: string, patch: PathPatch) {
+    return this.ready.then((r) => r.update(id, patch));
+  }
+  remove(id: string) {
+    return this.ready.then((r) => r.remove(id));
+  }
+  upvote(id: string) {
+    return this.ready.then((r) => r.upvote(id));
+  }
+  canEdit(id: string) {
+    return this.target?.canEdit(id) ?? false;
+  }
+  hasVoted(id: string) {
+    return this.target?.hasVoted(id) ?? false;
+  }
+}
+
+export const repository = new AutoPathRepository();

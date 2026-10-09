@@ -18,12 +18,16 @@ const gradeScore = (g?: string) => (g ? ({ "A+": 95, A: 88, B: 78, C: 70, D: 60,
 
 export function PathCard({
   record,
+  canDelete,
+  voted,
   onExecute,
   onEdit,
   onUpvote,
   onDelete,
 }: {
   record: PathRecord;
+  canDelete: boolean;
+  voted: boolean;
   onExecute: () => void;
   onEdit: () => void;
   onUpvote: () => void;
@@ -75,7 +79,16 @@ export function PathCard({
         <Button size="sm" variant="primary" className="flex-1" onClick={onExecute}>
           <IconPlay size={12} /> Execute in Simulator
         </Button>
-        <Button size="sm" variant="secondary" onClick={onUpvote} title="Upvote" aria-label={`Upvote, ${record.upvotes} votes`}>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={onUpvote}
+          disabled={voted}
+          className={cx(voted && "!text-deep !opacity-100")}
+          title={voted ? "You upvoted this" : "Upvote"}
+          aria-label={voted ? `Upvoted, ${record.upvotes} votes` : `Upvote, ${record.upvotes} votes`}
+          aria-pressed={voted}
+        >
           <IconArrowUp size={12} /> <span className="font-mono tabular">{record.upvotes}</span>
         </Button>
         <Button size="sm" variant="ghost" className="!px-1.5" onClick={onEdit} title="Open in editor" aria-label="Open in editor">
@@ -84,7 +97,7 @@ export function PathCard({
         <Button size="sm" variant="ghost" className="!px-1.5" onClick={copy} title="Copy data string" aria-label="Copy data string">
           <IconCopy size={14} />
         </Button>
-        {confirming ? (
+        {!canDelete ? null : confirming ? (
           <Button
             size="sm"
             variant="danger"
