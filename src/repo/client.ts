@@ -9,19 +9,24 @@ const LOCAL_PATHS_KEY = "dsim.paths.v1";
 const EDIT_KEYS_KEY = "deepsim.editKeys.v1";
 const VOTED_KEY = "deepsim.voted.v1";
 const VOTER_KEY = "deepsim.voterId.v1";
-const IMPORTED_KEY = "deepsim.imported.v1";
+const IMPORTED_KEY = "deepsim.imported.v2";
+const SEED_IDS_KEY = "deepsim.seedIds.v1";
 
-// Mirror of everything written, so edit keys and votes survive the session even when localStorage is blocked.
+// Mirror of everything written this session. A key whose last write did not reach localStorage (blocked or over
+// quota) is read from the mirror, so a fresh edit key never loses to an older stored value.
 const memory = new Map<string, string>();
+const unsaved = new Set<string>();
 
 function readJson<T>(key: string, fallback: T): T {
-  let raw: string | null | undefined;
-  try {
-    raw = localStorage.getItem(key);
-  } catch {
-    /* storage blocked */
+  let raw: string | null | undefined = unsaved.has(key) ? memory.get(key) : undefined;
+  if (raw === undefined) {
+    try {
+      raw = localStorage.getItem(key);
+    } catch {
+      /* storage blocked */
+    }
+    raw ??= memory.get(key);
   }
-  raw ??= memory.get(key);
   if (!raw) return fallback;
   try {
     return JSON.parse(raw) as T;
@@ -34,8 +39,9 @@ function writeJson(key: string, value: unknown) {
   memory.set(key, raw);
   try {
     localStorage.setItem(key, raw);
+    unsaved.delete(key);
   } catch {
-    /* storage full or blocked — the in-memory copy keeps the session working */
+    unsaved.add(key); // storage full or blocked — the in-memory copy keeps the session working
   }
 }
 
@@ -75,11 +81,11 @@ const votes = {
 /* ------------------------------ HTTP adapter ------------------------------ */
 
 const PAGE = 100;
-const MAX_LIST = 1000;
+export const MAX_LIST = 1000;
 
 export class HttpPathRepository implements PathRepository {
   readonly kind = "http" as const;
-  constructor(private base: string) {}
+  constructor(readonly base: string) {}
 
   private async req<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${this.base}${path}`, {
@@ -157,6 +163,7 @@ export class LocalPathRepository implements PathRepository {
     const rows = readJson<PathRecord[] | null>(LOCAL_PATHS_KEY, null);
     if (Array.isArray(rows)) return rows;
     const seeded = seedRecords();
+    writeJson(SEED_IDS_KEY, seeded.map((r) => r.id));
     this.write(seeded);
     return seeded;
   }
@@ -250,23 +257,41 @@ function seedRecords(): PathRecord[] {
 const seedKey = (r: { name: string; data: string }) => `${r.name}\u0000${r.data}`;
 const SEED_KEYS = new Set(SEED_PATHS.map(seedKey));
 
-/** Paths this browser published to its local store (seeds excluded) that have not been copied to the server yet. */
-export function localPathsToImport(): PathRecord[] {
-  const rows = readJson<PathRecord[]>(LOCAL_PATHS_KEY, []);
-  const done = new Set(readJson<string[]>(IMPORTED_KEY, []));
-  return Array.isArray(rows) ? rows.filter((r) => !SEED_KEYS.has(seedKey(r)) && !done.has(r.id)) : [];
+/** True for starter paths this browser generated itself. Older stores without the id list fall back to matching content. */
+function isGeneratedSeed(r: PathRecord, seedIds: Set<string> | null) {
+  return seedIds ? seedIds.has(r.id) : SEED_KEYS.has(seedKey(r));
 }
 
-export async function importLocalPaths(target: PathRepository): Promise<number> {
-  const done = readJson<string[]>(IMPORTED_KEY, []);
-  let n = 0;
-  for (const r of localPathsToImport()) {
-    await target.create(draftFromSource(r.data, { name: r.name, teamNumber: r.teamNumber, category: r.category, description: r.description }));
-    done.push(r.id);
-    writeJson(IMPORTED_KEY, done);
-    n++;
-  }
-  return n;
+/** Imported local ids, per destination API, so switching servers does not hide paths that never reached the new one. */
+const importedFor = (destination: string) => new Set(readJson<Record<string, string[]>>(IMPORTED_KEY, {})[destination] ?? []);
+function markImported(destination: string, id: string) {
+  const all = readJson<Record<string, string[]>>(IMPORTED_KEY, {});
+  all[destination] = [...(all[destination] ?? []), id];
+  writeJson(IMPORTED_KEY, all);
+}
+
+/** Paths this browser published to its local store (generated seeds excluded) that have not reached `destination` yet. */
+export function localPathsToImport(destination: string): PathRecord[] {
+  const rows = readJson<PathRecord[]>(LOCAL_PATHS_KEY, []);
+  if (!Array.isArray(rows)) return [];
+  const ids = readJson<string[] | null>(SEED_IDS_KEY, null);
+  const seedIds = Array.isArray(ids) ? new Set(ids) : null;
+  const done = importedFor(destination);
+  return rows.filter((r) => !isGeneratedSeed(r, seedIds) && !done.has(r.id));
+}
+
+/** Copy local-only paths to the server. Serialised across tabs so two tabs never publish the same path twice. */
+export async function importLocalPaths(target: PathRepository, destination: string): Promise<number> {
+  const run = async () => {
+    let n = 0;
+    for (const r of localPathsToImport(destination)) {
+      await target.create(draftFromSource(r.data, { name: r.name, teamNumber: r.teamNumber, category: r.category, description: r.description }));
+      markImported(destination, r.id);
+      n++;
+    }
+    return n;
+  };
+  return navigator.locks ? navigator.locks.request("deepsim-import", run) : run();
 }
 
 /* ------------------------------ Resolution ------------------------------ */
@@ -296,6 +321,10 @@ class AutoPathRepository implements PathRepository {
   }
   get kind() {
     return this.target?.kind ?? "pending";
+  }
+  /** The API base this browser talks to, or null for the local store. */
+  get destination() {
+    return this.target instanceof HttpPathRepository ? this.target.base : null;
   }
   list(query?: ListQuery) {
     return this.ready.then((r) => r.list(query));

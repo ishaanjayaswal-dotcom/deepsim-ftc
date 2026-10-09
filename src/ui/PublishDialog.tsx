@@ -41,6 +41,28 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
   }, [source]);
   const canUpdate = Boolean(active.recordId && repository.canEdit(active.recordId));
 
+  // Editing a path this browser published: start from its stored metadata, not from the source defaults,
+  // so "update the original" never wipes a title, strategy or notes the user didn't touch.
+  useEffect(() => {
+    if (!canUpdate || !active.recordId) return;
+    let live = true;
+    repository
+      .get(active.recordId)
+      .then((rec) => {
+        if (!live) return;
+        setName(rec.name);
+        setTeam(String(rec.teamNumber));
+        setCategory(rec.category);
+        setDescription(rec.description);
+      })
+      .catch(() => {
+        /* the original is gone; publishing a copy still works */
+      });
+    return () => {
+      live = false;
+    };
+  }, [canUpdate, active.recordId]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);

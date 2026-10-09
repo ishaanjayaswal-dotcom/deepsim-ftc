@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { importLocalPaths, localPathsToImport, repository } from "../repo/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { importLocalPaths, localPathsToImport, MAX_LIST, repository } from "../repo/client";
 import { STRATEGY_CATEGORIES, type PathSummary } from "../repo/types";
 import { useApp } from "../store/app";
 import { IconSearch, IconUsers } from "./icons";
@@ -16,12 +16,19 @@ export function HubPanel() {
   const [pendingImport, setPendingImport] = useState(0);
   const [importing, setImporting] = useState(false);
 
+  // Only the newest request may update the list, so a slow earlier search can't overwrite a newer one.
+  const latest = useRef(0);
   const load = useCallback(async () => {
-    setError(null);
+    const ticket = ++latest.current;
     try {
-      setRows(await repository.list({ q: q.trim() || undefined, category: category || undefined, sort }));
-      setPendingImport(repository.kind === "http" ? localPathsToImport().length : 0);
+      const next = await repository.list({ q: q.trim() || undefined, category: category || undefined, sort });
+      if (ticket !== latest.current) return;
+      setError(null);
+      setRows(next);
+      const dest = repository.destination;
+      setPendingImport(dest ? localPathsToImport(dest).length : 0);
     } catch (e) {
+      if (ticket !== latest.current) return;
       setError((e as Error).message);
       setRows([]);
     }
@@ -66,7 +73,9 @@ export function HubPanel() {
   const runImport = async () => {
     setImporting(true);
     await mutate(async () => {
-      const n = await importLocalPaths(repository);
+      const dest = repository.destination;
+      if (!dest) return;
+      const n = await importLocalPaths(repository, dest);
       app().showToast(`Copied ${n} path${n === 1 ? "" : "s"} from this browser to the hub`, "good");
     });
     setImporting(false);
@@ -141,6 +150,9 @@ export function HubPanel() {
             <div className="text-[13px] font-medium">No paths match</div>
             <div className="text-[12px] text-dim">Publish one from the editor — Gracious Professionalism starts with sharing.</div>
           </div>
+        )}
+        {rows && rows.length >= MAX_LIST && (
+          <div className="rounded-lg px-1 text-[11px] text-dim">Showing the first {MAX_LIST.toLocaleString()} paths. Search or filter to narrow the list.</div>
         )}
         {rows?.map((r) => (
           <PathCard
