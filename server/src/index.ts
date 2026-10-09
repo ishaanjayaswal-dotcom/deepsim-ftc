@@ -18,8 +18,13 @@ async function main(): Promise<void> {
   await ensureDataDir(config.databaseUrl);
 
   const db = createDb(config.databaseUrl, config.databaseAuthToken);
-  await runMigrations(db);
-  await seedIfEmpty(db, config.seed);
+  try {
+    await runMigrations(db);
+    await seedIfEmpty(db, config.seed);
+  } catch (err) {
+    db.$client.close();
+    throw err;
+  }
 
   const app = createApp({ db, config });
 
@@ -35,7 +40,10 @@ async function main(): Promise<void> {
   );
 
   const shutdown = () => {
-    server.close(() => process.exit(0));
+    server.close(() => {
+      db.$client.close();
+      process.exit(0);
+    });
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

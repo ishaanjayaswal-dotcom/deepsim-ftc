@@ -7,6 +7,7 @@ import type { PathRecord } from "../../../src/repo/types.js";
 import type { AppDeps } from "../app.js";
 import { paths, votes } from "../db/schema.js";
 import { canEdit, createEditKey, EDIT_FORBIDDEN, hashEditKey } from "../lib/auth.js";
+import { createRateLimiter, rateLimit } from "../lib/rateLimit.js";
 import { draftSchema, patchSchema, querySchema, validate, validationMessage, voterSchema } from "../lib/validation.js";
 
 type PathRow = typeof paths.$inferSelect;
@@ -29,7 +30,7 @@ function derive(data: string) {
   }
 }
 
-export function createPathsRoutes({ db, config }: AppDeps): Hono {
+export function createPathsRoutes({ db, config, limiter = createRateLimiter() }: AppDeps): Hono {
   const routes = new Hono();
   const find = async (id: string) => {
     const [row] = await db.select().from(paths).where(eq(paths.id, id));
@@ -63,7 +64,7 @@ export function createPathsRoutes({ db, config }: AppDeps): Hono {
 
   routes.get("/:id", async (c) => c.json(toRecord(await find(c.req.param("id")))));
 
-  routes.post("/", validate("json", draftSchema), async (c) => {
+  routes.post("/", rateLimit(limiter, "create", config.trustProxy), validate("json", draftSchema), async (c) => {
     const draft = c.req.valid("json");
     const editKey = createEditKey();
     const now = new Date().toISOString();
@@ -74,7 +75,7 @@ export function createPathsRoutes({ db, config }: AppDeps): Hono {
     return c.json({ ...toRecord(row), editKey }, 201);
   });
 
-  routes.patch("/:id", validate("json", patchSchema), async (c) => {
+  routes.patch("/:id", rateLimit(limiter, "edit", config.trustProxy), validate("json", patchSchema), async (c) => {
     const row = await find(c.req.param("id"));
     authorize(row, c.req.header("X-Edit-Key"), c.req.header("Authorization"));
     const patch = c.req.valid("json");
@@ -85,14 +86,14 @@ export function createPathsRoutes({ db, config }: AppDeps): Hono {
     return c.json(toRecord(updated));
   });
 
-  routes.delete("/:id", async (c) => {
+  routes.delete("/:id", rateLimit(limiter, "edit", config.trustProxy), async (c) => {
     const row = await find(c.req.param("id"));
     authorize(row, c.req.header("X-Edit-Key"), c.req.header("Authorization"));
     await db.delete(paths).where(eq(paths.id, row.id));
     return c.body(null, 204);
   });
 
-  routes.post("/:id/upvote", async (c) => {
+  routes.post("/:id/upvote", rateLimit(limiter, "upvote", config.trustProxy), async (c) => {
     const voter = voterSchema.safeParse(c.req.header("X-Voter-Id") ?? "");
     if (!voter.success) return c.json({ error: validationMessage(voter.error) }, 400);
     const id = c.req.param("id");

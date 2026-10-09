@@ -7,7 +7,7 @@ const envSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   DATABASE_URL: z.string().default("file:./data/deepsim.db"),
   DATABASE_AUTH_TOKEN: z.string().optional(),
-  ADMIN_KEY: z.string().optional(),
+  ADMIN_KEY: z.string().min(16, "ADMIN_KEY must be at least 16 characters when set").optional(),
   CORS_ORIGIN: z.string().optional(),
   TRUST_PROXY: z
     .string()
