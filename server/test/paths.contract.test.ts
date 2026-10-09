@@ -9,7 +9,6 @@ import {
   ADMIN_KEY,
   assertNoEditKeyLeak,
   createTestContext,
-  nodeBindings,
   PARK_SOURCE,
   validDraft,
   VOTER_A,
@@ -64,9 +63,26 @@ describe("paths API contract", () => {
     expect(byTeam).toHaveLength(1);
     expect(byTeam[0].teamNumber).toBe(27182);
 
-    const byCategory = await (await ctx.app.request("/api/paths?category=Park%20Only")).json();
-    expect(byCategory).toHaveLength(1);
-    expect(byCategory[0].category).toBe("Park Only");
+    const descOnly = "qsearch-desc-unique-xyzzy";
+    const catOnly = "QsearchCatUniqueWombat";
+    await ctx.app.request("/api/paths", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(validDraft({ description: descOnly, category: "Park Only" })),
+    });
+    await ctx.app.request("/api/paths", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(validDraft({ description: "plain", category: catOnly })),
+    });
+
+    const byDescription = await (await ctx.app.request(`/api/paths?q=${encodeURIComponent(descOnly)}`)).json();
+    expect(byDescription).toHaveLength(1);
+    expect(byDescription[0].description).toBe(descOnly);
+
+    const byCategoryQ = await (await ctx.app.request(`/api/paths?q=${encodeURIComponent(catOnly)}`)).json();
+    expect(byCategoryQ).toHaveLength(1);
+    expect(byCategoryQ[0].category).toBe(catOnly);
   });
 
   it("treats LIKE wildcards in q literally", async () => {
@@ -80,7 +96,7 @@ describe("paths API contract", () => {
     const page = await (await ctx.app.request("/api/paths?limit=1&offset=1")).json();
     expect(page).toHaveLength(1);
 
-    const badLimit = await ctx.app.request("/api/paths?limit=201");
+    const badLimit = await ctx.app.request("/api/paths?limit=101");
     expect(badLimit.status).toBe(400);
     const err = await badLimit.json();
     expect(err.error).toMatch(/limit/i);
@@ -120,6 +136,7 @@ describe("paths API contract", () => {
       [{ name: "" }, /name/i],
       [{ name: "x".repeat(81) }, /name/i],
       [{ teamNumber: 0 }, /teamNumber/i],
+      [{ teamNumber: 1.5 }, /teamNumber/i],
       [{ teamNumber: 100_000 }, /teamNumber/i],
       [{ category: "" }, /category/i],
       [{ category: "c".repeat(41) }, /category/i],
@@ -247,6 +264,35 @@ describe("paths API contract", () => {
       headers: { "X-Voter-Id": "short" },
     });
     expect(badVoter.status).toBe(400);
+
+    const invalidChar = await ctx.app.request(`/api/paths/${id}/upvote`, {
+      method: "POST",
+      headers: { "X-Voter-Id": "bad!chars" },
+    });
+    expect(invalidChar.status).toBe(400);
+    expect((await invalidChar.json()).error).toMatch(/X-Voter-Id/i);
+
+    const tooLong = await ctx.app.request(`/api/paths/${id}/upvote`, {
+      method: "POST",
+      headers: { "X-Voter-Id": "a".repeat(65) },
+    });
+    expect(tooLong.status).toBe(400);
+
+    const { id: boundaryId } = await (
+      await ctx.app.request("/api/paths", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(validDraft({ name: "Voter boundary path" })),
+      })
+    ).json();
+    for (const voterId of ["12345678", "a".repeat(64)]) {
+      expect(
+        (await ctx.app.request(`/api/paths/${boundaryId}/upvote`, {
+          method: "POST",
+          headers: { "X-Voter-Id": voterId },
+        })).status,
+      ).toBe(200);
+    }
 
     const first = await ctx.app.request(`/api/paths/${id}/upvote`, {
       method: "POST",

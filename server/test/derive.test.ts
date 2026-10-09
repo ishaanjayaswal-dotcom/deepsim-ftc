@@ -3,7 +3,7 @@ import { DEFAULT_ROBOT } from "../../src/config/robot.js";
 import { evaluatePath } from "../../src/eval/advocate.js";
 import { compilePath } from "../../src/path/compile.js";
 import { parsePath } from "../../src/path/parser.js";
-import { opponentSpec, presetSource } from "../../src/path/presets.js";
+import { opponentSpec } from "../../src/path/presets.js";
 import { deriveFromSource, REFERENCE_OPPONENT, thumbnailFor } from "../../src/repo/derive.js";
 import { SEED_PATHS } from "../../src/repo/seed.js";
 

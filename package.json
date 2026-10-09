@@ -11,7 +11,7 @@
     "build:server": "esbuild server/src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=server/dist/index.js",
     "start": "node server/dist/index.js",
     "preview": "vite preview",
-    "typecheck": "tsc -b && tsc -p server",
+    "typecheck": "tsc -b && tsc -p server && tsc -p server/tsconfig.test.json",
     "db:generate": "drizzle-kit generate",
     "test": "vitest run"
   },

@@ -9,6 +9,9 @@ import type { RateBucket, RateLimiter } from "../src/lib/rateLimit.js";
 import { createRateLimiter } from "../src/lib/rateLimit.js";
 import type { PathDraft } from "../../src/repo/types.js";
 
+/** POST /api/paths body (server ignores thumbnail and stats). */
+export type ApiPathDraft = Pick<PathDraft, "name" | "teamNumber" | "category" | "description" | "data">;
+
 export const ADMIN_KEY = "test-admin-secret-00";
 export const VOTER_A = "voter-aaaa1111";
 export const VOTER_B = "voter-bbbb2222";
@@ -24,7 +27,7 @@ export const PARK_SOURCE = `{
   ]
 }`;
 
-export function validDraft(overrides: Partial<PathDraft> = {}): PathDraft {
+export function validDraft(overrides: Partial<ApiPathDraft> = {}): ApiPathDraft {
   return {
     name: "Contract Test Path",
     teamNumber: 12345,

@@ -33,12 +33,54 @@ describe("server hardening", () => {
       );
 
     it("returns 429 with Retry-After per bucket", async () => {
+      const assertLimited = async (res: Response) => {
+        expect(res.status).toBe(429);
+        expect(res.headers.get("Retry-After")).toBe("42");
+        expect(await res.json()).toEqual({ error: "Too many requests" });
+      };
+
       const ok = await post("198.51.100.10");
       expect(ok.status).toBe(201);
-      const limited = await post("198.51.100.10");
-      expect(limited.status).toBe(429);
-      expect(limited.headers.get("Retry-After")).toBe("42");
-      expect(await limited.json()).toEqual({ error: "Too many requests" });
+      await assertLimited(await post("198.51.100.10"));
+
+      const created = await post("198.51.100.11");
+      expect(created.status).toBe(201);
+      const { id, editKey } = (await created.json()) as { id: string; editKey: string };
+      const patchOk = await ctx.app.request(
+        `/api/paths/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "X-Edit-Key": editKey },
+          body: JSON.stringify({ name: "Patched once" }),
+        },
+        nodeBindings("198.51.100.11"),
+      );
+      expect(patchOk.status).toBe(200);
+      await assertLimited(
+        await ctx.app.request(
+          `/api/paths/${id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", "X-Edit-Key": editKey },
+            body: JSON.stringify({ name: "Patched twice" }),
+          },
+          nodeBindings("198.51.100.11"),
+        ),
+      );
+
+      const upvoteOk = await ctx.app.request(
+        `/api/paths/${id}/upvote`,
+        { method: "POST", headers: { "X-Voter-Id": "rate-limit-voter-a" } },
+        nodeBindings("198.51.100.12"),
+      );
+      expect(upvoteOk.status).toBe(200);
+      await assertLimited(
+        await ctx.app.request(
+          `/api/paths/${id}/upvote`,
+          { method: "POST", headers: { "X-Voter-Id": "rate-limit-voter-b" } },
+          nodeBindings("198.51.100.12"),
+        ),
+      );
     });
 
     it("ignores X-Forwarded-For unless trustProxy is enabled", async () => {
@@ -101,6 +143,40 @@ describe("server hardening", () => {
           nodeBindings("198.51.100.30"),
         );
         expect(b.status).toBe(201);
+
+        const sharedLast = "203.0.113.77";
+        const sameLastCtx = await createTestContext({ limiter: createTinyLimiter(1), trustProxy: true });
+        try {
+          const warm = await sameLastCtx.app.request(
+            "/api/paths",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Forwarded-For": `203.0.113.1, ${sharedLast}`,
+              },
+              body: JSON.stringify(validDraft({ name: "Shared last warm" })),
+            },
+            nodeBindings("198.51.100.41"),
+          );
+          expect(warm.status).toBe(201);
+          const limited = await sameLastCtx.app.request(
+            "/api/paths",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Forwarded-For": `203.0.113.2, ${sharedLast}`,
+              },
+              body: JSON.stringify(validDraft({ name: "Shared last B" })),
+            },
+            nodeBindings("198.51.100.41"),
+          );
+          expect(limited.status).toBe(429);
+          expect(limited.headers.get("Retry-After")).toBe("42");
+        } finally {
+          sameLastCtx.close();
+        }
       } finally {
         withTrust.close();
       }
